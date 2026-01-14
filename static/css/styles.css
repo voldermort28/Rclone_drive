@@ -23,8 +23,12 @@ body {
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    align-items: center;
-    overflow: hidden; /* Prevent scrolling if possible */
+    align-items: flex-start;
+    /* Align to top */
+    overflow-y: auto;
+    padding-top: 100px;
+    /* Top margin */
+    /* Prevent scrolling if possible */
 }
 
 .background-glow {
@@ -41,7 +45,8 @@ body {
 
 .container {
     width: 100%;
-    max-width: 480px;
+    max-width: 100%;
+    /* Fill available width */
     padding: 2rem;
     display: flex;
     flex-direction: column;
@@ -65,8 +70,13 @@ header {
 }
 
 /* Tailwind-like utilities used in HTML */
-.w-6 { width: 2rem; }
-.h-6 { height: 2rem; }
+.w-6 {
+    width: 2rem;
+}
+
+.h-6 {
+    height: 2rem;
+}
 
 h1 {
     font-size: 2rem;
@@ -104,13 +114,36 @@ h1 {
     gap: 0.5rem;
 }
 
+.input-with-button {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.folder-browse-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 0 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.folder-browse-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
 label {
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-muted);
 }
 
-input {
+input,
+textarea {
     background: #0f172a;
     border: 1px solid var(--border);
     border-radius: 0.5rem;
@@ -119,9 +152,17 @@ input {
     font-family: inherit;
     font-size: 0.95rem;
     transition: all 0.2s;
+    resize: vertical;
 }
 
-input:focus {
+input[readonly] {
+    cursor: default;
+    background: rgba(15, 23, 42, 0.5);
+    color: var(--text-muted);
+}
+
+input:focus,
+textarea:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 2px var(--glow);
@@ -145,9 +186,35 @@ input:focus {
     background: var(--primary-hover);
 }
 
+
 .btn-primary:active {
     transform: scale(0.98);
 }
+
+.btn-stop {
+    background: #ef4444;
+    /* Red base color */
+    color: white;
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.875rem;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    font-family: inherit;
+    margin-top: 0.5rem;
+}
+
+.btn-stop:hover {
+    background-color: #dc2626;
+    /* Darker red */
+}
+
+.btn-stop:active {
+    transform: scale(0.98);
+}
+
 
 /* Status Section */
 .status-section {
@@ -158,14 +225,22 @@ input:focus {
 }
 
 @keyframes slideUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .status-header {
     display: flex;
-    justify-content: space-between;
-    align-items: baseline;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
 }
 
 .status-header h3 {
@@ -176,10 +251,7 @@ input:focus {
 .file-name {
     font-size: 0.875rem;
     color: var(--text-muted);
-    max-width: 200px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-all;
 }
 
 .progress-container {
@@ -209,64 +281,123 @@ input:focus {
     color: var(--text-muted);
 }
 
-/* Logs */
-.logs-container {
+/* Files Table */
+.files-container {
     margin-top: 0.5rem;
     border-top: 1px solid var(--border);
     padding-top: 1rem;
-}
-
-.logs-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 300px;
+    /* Limit height */
+    flex: 1;
 }
 
-.logs-header span {
+.files-header h3 {
     font-size: 0.875rem;
     font-weight: 600;
     color: var(--text-muted);
 }
 
-.clear-logs {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    cursor: pointer;
-    text-decoration: underline;
-}
-
-.logs-content {
-    background: #0f172a;
-    border-radius: 0.5rem;
-    padding: 0.75rem;
-    height: 120px;
+.table-responsive {
     overflow-y: auto;
-    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+    border-radius: 0.5rem;
+    background: #0f172a;
+    flex: 1;
 }
 
-.log-entry {
-    line-height: 1.4;
+.files-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.files-table th {
+    top: 0;
+    position: sticky;
+    background: #1e293b;
+    padding: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+}
+
+.files-table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-main);
+    vertical-align: middle;
+}
+
+.files-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Status Badges & Progress */
+.status-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.status-completed {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.status-skipped {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.status-error {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* Table Progress Bar */
+.tbl-progress-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+    margin-top: 4px;
+}
+
+.tbl-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    width: 0%;
+    transition: width 0.2s;
+}
+
+.file-row-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     word-break: break-all;
 }
 
-.log-entry.error { color: #ef4444; }
-.log-entry.info { color: #94a3b8; }
+.file-icon {
+    color: var(--text-muted);
+}
 
 /* Scrollbar */
 ::-webkit-scrollbar {
     width: 6px;
 }
+
 ::-webkit-scrollbar-track {
     background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
     background: var(--border);
     border-radius: 3px;

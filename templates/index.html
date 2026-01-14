@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,14 +10,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/styles.css">
 </head>
+
 <body>
     <div class="background-glow"></div>
-    
+
     <main class="container">
         <header>
             <div class="logo">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z"/>
+                    <path
+                        d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z" />
                 </svg>
                 <h1>GDriveDL</h1>
             </div>
@@ -25,13 +28,18 @@
 
         <section class="card input-section">
             <div class="input-group">
-                <label for="url">Google Drive URL</label>
-                <input type="text" id="url" placeholder="Paste file or folder link here..." autocomplete="off">
+                <label for="url">Google Drive URL(s) - One per line</label>
+                <textarea id="url" rows="5" placeholder="Paste file or folder links here (one per line)..."
+                    autocomplete="off"></textarea>
             </div>
 
             <div class="input-group">
-                <label for="output_dir">Output Directory (Optional)</label>
-                <input type="text" id="output_dir" placeholder="Default: ./downloads">
+                <label for="output_dir">Output Directory</label>
+                <div class="input-with-button">
+                    <input type="text" id="output_dir" placeholder="Default: ~/Downloads/GDriveDL" readonly
+                        style="flex:1; cursor: pointer;">
+                    <button id="browseBtn" class="folder-browse-btn">Select Folder</button>
+                </div>
             </div>
 
             <button id="downloadBtn" class="btn-primary">
@@ -44,7 +52,7 @@
                 <h3 id="statusText">Downloading...</h3>
                 <span id="fileText" class="file-name"></span>
             </div>
-            
+
             <div class="progress-container">
                 <div class="progress-bar-bg">
                     <div class="progress-bar-fill" id="progressBar"></div>
@@ -55,13 +63,24 @@
                 </div>
             </div>
 
-            <div class="logs-container">
-                <div class="logs-header">
-                    <span>Logs</span>
-                    <button class="clear-logs" onclick="clearLogs()">Clear</button>
+            <div class="files-container">
+                <div class="files-header">
+                    <h3>File List</h3>
                 </div>
-                <div class="logs-content" id="logsContent">
-                    <!-- Logs will appear here -->
+                <div class="table-responsive">
+                    <table class="files-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th>Name</th>
+                                <th style="width: 100px;">Size</th>
+                                <th style="width: 150px;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="filesListBody">
+                            <!-- Files will appear here -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -69,4 +88,5 @@
 
     <script src="/static/js/app.js"></script>
 </body>
+
 </html>

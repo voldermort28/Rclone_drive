@@ -7,17 +7,19 @@ import unicodedata
 import argparse
 import logging
 from contextlib import contextmanager
+import time
 from datetime import datetime, timedelta
 
 try:
     # Python3
     from urllib.request import Request, build_opener, HTTPCookieProcessor
+    from urllib.error import HTTPError, URLError
     from html.parser import HTMLParser
     from http.cookiejar import CookieJar
 except ImportError:
     # Python2
     from HTMLParser import HTMLParser
-    from urllib2 import Request, build_opener, HTTPCookieProcessor
+    from urllib2 import Request, build_opener, HTTPCookieProcessor, HTTPError, URLError
     from cookielib import CookieJar
 
 try:
@@ -33,8 +35,8 @@ CHUNKSIZE = 64 * 1024
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
 ID_PATTERNS = [
-    re.compile("/file/d/([0-9A-Za-z_-]{10,})(?:/|$)", re.IGNORECASE),
-    re.compile("/folders/([0-9A-Za-z_-]{10,})(?:/|$)", re.IGNORECASE),
+    re.compile("/file/d/([0-9A-Za-z_-]{10,})(?:[/?]|$)", re.IGNORECASE),
+    re.compile("/folders/([0-9A-Za-z_-]{10,})(?:[/?]|$)", re.IGNORECASE),
     re.compile("id=([0-9A-Za-z_-]{10,})(?:&|$)", re.IGNORECASE),
     re.compile("([0-9A-Za-z_-]{10,})", re.IGNORECASE),
 ]
@@ -130,7 +132,7 @@ def url_to_id(url):
 
 
 class GDriveDL(object):
-    def __init__(self, quiet=False, overwrite=False, mtimes=False, continue_on_errors=False, progress_callback=None, log_callback=None):
+    def __init__(self, quiet=False, overwrite=False, mtimes=False, continue_on_errors=False, progress_callback=None, log_callback=None, status_callback=None, stop_callback=None):
         self._quiet = quiet
         self._overwrite = overwrite
         self._mtimes = mtimes
@@ -141,6 +143,8 @@ class GDriveDL(object):
         self._errors = []
         self._progress_callback = progress_callback
         self._log_callback = log_callback
+        self._status_callback = status_callback
+        self._stop_callback = stop_callback
 
     def _log(self, message, level=logging.INFO):
         if self._log_callback:
@@ -157,6 +161,10 @@ class GDriveDL(object):
 
     def _error(self, message):
         self._log(message, logging.ERROR)
+        if self._status_callback:
+             # Try to extract filename if possible, otherwise generic
+             self._status_callback('error', 'error', 0, message)
+
         self._errors.append(message)
         if not self._continue_on_errors:
             if not self._log_callback: # Don't exit if we are in a library context
@@ -173,7 +181,49 @@ class GDriveDL(object):
         self._log("Requesting: {}".format(url), logging.DEBUG)
         req = Request(url, headers={"User-Agent": USER_AGENT})
 
-        f = self._opener.open(req)
+        f = None
+        retries = 6
+        delay = 2
+        last_error = None
+
+        for attempt in range(retries):
+            try:
+                f = self._opener.open(req)
+                break # Success
+            except HTTPError as e:
+                # 429: Too Many Requests, 5xx: Server Errors
+                if e.code == 429 or 500 <= e.code < 600:
+                    if attempt < retries - 1:
+                        self._log("HTTP Error {} requesting {}. Retrying in {}s... (Attempt {}/{})".format(e.code, url, delay, attempt + 1, retries), logging.WARNING)
+                        time.sleep(delay)
+                        delay *= 2
+                        last_error = e
+                        continue
+                raise e
+            except URLError as e:
+                if attempt < retries - 1:
+                    self._log("Connection error requesting {}: {}. Retrying in {}s... (Attempt {}/{})".format(url, str(e), delay, attempt + 1, retries), logging.WARNING)
+                    time.sleep(delay)
+                    delay *= 2
+                    last_error = e
+                    continue
+                raise e
+            except Exception as e:
+                 # Generic fallback for temporary network hiccups
+                 if attempt < retries - 1:
+                    self._log("Error requesting {}: {}. Retrying in {}s...".format(url, str(e), delay), logging.WARNING)
+                    time.sleep(delay)
+                    delay *= 2
+                    last_error = e
+                    continue
+                 raise e
+
+        if f is None:
+             if last_error:
+                 raise last_error
+             else:
+                 raise Exception("Failed to open URL: {}".format(url))
+
         try:
             yield f
         finally:
@@ -196,12 +246,12 @@ class GDriveDL(object):
         elif "/folders/" in url:
             if filename:
                 self._log("Ignoring --output-document option for folder download", logging.WARNING)
-            self.process_folder(id, directory, verbose)
+            self.process_folder(id, directory, verbose, create_subdir=True)
         else:
             self._error("{}: returned an unknown url {}".format(id, url))
             return
 
-    def process_folder(self, id, directory, verbose):
+    def process_folder(self, id, directory, verbose, create_subdir=False):
         if id in self._processed:
             self._log('Skipping already processed folder: {}'.format(id), logging.DEBUG)
             return
@@ -213,6 +263,28 @@ class GDriveDL(object):
         if verbose:
             self._log("HTML page contents:\n\n{}\n\n".format(html), logging.DEBUG)
 
+        if create_subdir:
+            # Extract folder name from title or og:title
+            # <meta property="og:title" content="FOLDER_NAME">
+            title_match = re.search(r'<meta property="og:title" content="(.*?)">', html)
+            if title_match:
+                folder_name = sanitize(title_match.group(1))
+                directory = os.path.join(directory, folder_name)
+                self._log("Found folder name: '{}', creating subdirectory".format(folder_name))
+            else:
+                 # Fallback to <title>
+                title_match = re.search(r'<title>(.*?)</title>', html)
+                if title_match:
+                    raw_title = title_match.group(1)
+                    # Remove " - Google Drive" suffix if present
+                    if " - Google Drive" in raw_title:
+                        folder_name = sanitize(raw_title.replace(" - Google Drive", ""))
+                    else:
+                        folder_name = sanitize(raw_title)
+                    
+                    directory = os.path.join(directory, folder_name)
+                    self._log("Found folder name: '{}', creating subdirectory".format(folder_name))
+        
         matches = re.findall(FOLDER_PATTERN, html)
 
         if not matches and "ServiceLogin" in html:
@@ -226,12 +298,17 @@ class GDriveDL(object):
                 self._error("{}: Unable to find ID from url".format(url))
                 continue
 
-            if "/file/" in url.lower():
-                self.process_file(
-                    id, directory, verbose, filename=sanitize(item_name), modified=modified
-                )
-            elif "/folders/" in url.lower():
-                self.process_folder(id, os.path.join(directory, sanitize(item_name)), verbose)
+            try:
+                if "/file/" in url.lower():
+                    self.process_file(
+                        id, directory, verbose, filename=sanitize(item_name), modified=modified
+                    )
+                elif "/folders/" in url.lower():
+                    self.process_folder(id, os.path.join(directory, sanitize(item_name)), verbose, create_subdir=False)
+            except Exception as e:
+                self._error("Error processing item {}: {}".format(url, str(e)))
+                if not self._continue_on_errors:
+                    raise
 
         if self._create_empty_dirs and not os.path.exists(directory):
             os.makedirs(directory)
@@ -271,9 +348,18 @@ class GDriveDL(object):
         except:
             self._log("Failed to set mtime", logging.DEBUG)
 
-    def _exists(self, file_path, modified):
+    def _exists(self, file_path, modified, remote_size=None):
         if self._overwrite or not os.path.exists(file_path):
             return False
+
+        if remote_size is not None:
+            try:
+                local_size = os.path.getsize(file_path)
+                if local_size != remote_size:
+                    self._log("Size mismatch: Local={}, Remote={}. Redownloading.".format(local_size, remote_size), logging.INFO)
+                    return False
+            except:
+                self._log("Failed to get local size", logging.DEBUG)
 
         if modified:
             try:
@@ -293,9 +379,8 @@ class GDriveDL(object):
                 if os.path.isabs(filename)
                 else os.path.join(directory, filename)
             )
-            if self._exists(file_path, modified_ts):
-                self._log("{file_path} [Exists]".format(file_path=file_path))
-                return
+            # Integrity check moved to after headers are received
+
 
         url = FILE_URL.format(id=id)
         if confirm:
@@ -351,9 +436,10 @@ class GDriveDL(object):
             if not file_path:
                 filename = FILENAME_PATTERN.search(content_disposition).group(1)
                 file_path = os.path.join(directory, sanitize(filename))
-                if self._exists(file_path, modified_ts):
-                    self._log("{file_path} [Exists]".format(file_path=file_path))
-                    return
+                # _exists check will happen below after determining file_size if possible, 
+                # or we can check here if we don't care about size yet, but we do.
+                # actually we should wait to check specific logic below using headers.
+
 
             directory = os.path.dirname(file_path)
             if not os.path.exists(directory):
@@ -365,10 +451,26 @@ class GDriveDL(object):
                 file_size = resp.headers.get("Content-Length")
                 file_size = int(file_size) if file_size else None
                 
+                # Check existence with size validation
+                if self._exists(file_path, modified_ts, file_size):
+                    self._log("{file_path} [Exists]".format(file_path=file_path))
+                    if self._status_callback:
+                        self._status_callback(file_path, 'exists', file_size)
+                    return
+                
+                if self._status_callback:
+                    self._status_callback(file_path, 'started', file_size)
+
                 with open(file_path, "wb") as f:
                     dl = 0
                     last_out = 0
                     while True:
+                        if self._stop_callback and self._stop_callback():
+                            self._log("Download stopped by user.", logging.INFO)
+                            if self._status_callback:
+                                self._status_callback(file_path, 'stopped', file_size)
+                            return
+
                         chunk = resp.read(CHUNKSIZE)
                         if not chunk:
                             break
@@ -397,12 +499,16 @@ class GDriveDL(object):
                             )
                              last_out = dl
                              sys.stdout.flush()
-            except:
+            except Exception as e:
+                if self._status_callback:
+                    self._status_callback(file_path, 'error', file_size, str(e))
                 if os.path.exists(file_path):
                     os.remove(file_path)
                 raise
             else:
                 self._set_modified(file_path, modified_ts)
+                if self._status_callback:
+                    self._status_callback(file_path, 'completed', file_size)
 
         if not self._quiet and not self._progress_callback:
             output("\n")
