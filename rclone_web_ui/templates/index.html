@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GDriveDL - Rclone Controller</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css?v=1.1">
+</head>
+
+<body>
+    <div class="background-glow"></div>
+
+    <main class="container">
+        <header>
+            <div class="logo">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
+                    <path
+                        d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z" />
+                </svg>
+                <h1>GDriveDL</h1>
+            </div>
+            <p class="subtitle">Rclone VPS Web Controller</p>
+        </header>
+
+        <!-- ========== TABS NAVIGATION ========== -->
+        <nav class="tabs-nav">
+            <button class="tab-btn active" data-tab="transfer">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Transfer
+            </button>
+            <button class="tab-btn" data-tab="config">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                Cấu hình
+            </button>
+            <button class="tab-btn" data-tab="history">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+                Lịch sử
+            </button>
+        </nav>
+
+        <!-- ========== TAB: TRANSFER ========== -->
+        <div class="tab-content active" id="tab-transfer">
+            <section class="card input-section">
+                <div class="input-group">
+                    <label for="url">Source Remotes/URLs (Mỗi dòng 1 link)</label>
+                    <textarea id="url" rows="5" placeholder="VD: gc:{source_folder_id} hoặc https://drive.google.com/..."
+                        autocomplete="off"></textarea>
+                </div>
+
+                <div class="input-group">
+                    <label for="output_dir">Destination Remote (Nơi nhận)</label>
+                    <input type="text" id="output_dir" placeholder="VD: gc:{destination_folder_id}">
+                </div>
+
+                <button id="downloadBtn" class="btn-primary">
+                    <span class="btn-text">Bắt đầu Copy</span>
+                </button>
+            </section>
+
+            <section class="card status-section" id="statusSection" style="display: none;">
+                <div class="status-header">
+                    <h3 id="statusText">Đang tải...</h3>
+                    <span id="fileText" class="file-name"></span>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progressBar"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progressPercent">0%</span>
+                        <span id="sizeInfo"></span>
+                    </div>
+                </div>
+
+                <div class="files-container">
+                    <div class="files-header">
+                        <h3>Danh sách Jobs</h3>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="files-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 50px;">#</th>
+                                    <th>Nguồn</th>
+                                    <th style="width: 100px;">Tiến trình</th>
+                                    <th style="width: 150px;">Trạng thái</th>
+                                </tr>
+                            </thead>
+                            <tbody id="filesListBody">
+                                <!-- Files will appear here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ========== TAB: CONFIG ========== -->
+        <div class="tab-content" id="tab-config">
+            <!-- Rclone Config Section -->
+            <section class="card config-section">
+                <div class="config-header">
+                    <h3>⚙️ Cấu hình Rclone</h3>
+                    <p class="config-desc">Chỉnh sửa nội dung file <code>rclone.conf</code> để thêm tài khoản Google Drive.</p>
+                </div>
+                <div class="input-group">
+                    <textarea id="configEditor" rows="12" placeholder="Đang tải cấu hình..." spellcheck="false" class="code-editor"></textarea>
+                </div>
+                <div class="config-actions">
+                    <button id="loadConfigBtn" class="btn-secondary">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        Tải lại
+                    </button>
+                    <button id="saveConfigBtn" class="btn-primary">
+                        <span class="btn-text">💾 Lưu cấu hình</span>
+                    </button>
+                </div>
+                <div id="configStatus" class="config-status"></div>
+            </section>
+
+            <!-- Service Account Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;">
+                <div class="config-header">
+                    <h3>🔑 Service Accounts (Vượt 750GB)</h3>
+                    <p class="config-desc">Upload file <code>.zip</code> chứa các file JSON của Service Account. Hệ thống sẽ tự động giải nén và sử dụng để xoay vòng khi copy.</p>
+                </div>
+                <div class="sa-upload-area" id="saUploadArea">
+                    <input type="file" id="saFileInput" accept=".zip,.json" style="display: none;">
+                    <div class="sa-upload-content">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <p>Kéo thả file <strong>.zip</strong> vào đây hoặc <span class="sa-browse">chọn file</span></p>
+                    </div>
+                </div>
+                <div id="saStatus" class="config-status"></div>
+                <div id="saInfo" class="sa-info"></div>
+            </section>
+        </div>
+
+        <!-- ========== TAB: HISTORY ========== -->
+        <div class="tab-content" id="tab-history">
+            <section class="card config-section">
+                <div class="config-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h3>🕒 Lịch sử sao chép</h3>
+                        <p class="config-desc">Logs các tiến trình đã hoàn tất, bị lỗi hoặc bị dừng.</p>
+                    </div>
+                    <button id="clearHistoryBtn" class="btn-secondary" style="border: 1px solid #ef4444; color: #ef4444;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        Xóa lịch sử
+                    </button>
+                </div>
+                
+                <div class="table-responsive" style="margin-top: 15px;">
+                    <table class="files-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 150px;">Thời gian</th>
+                                <th>Nguồn (URL)</th>
+                                <th>Đích (Dest)</th>
+                                <th style="width: 150px;">Trạng thái</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyListBody">
+                            <tr><td colspan="4" style="text-align: center; padding: 20px;">Đang tải...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="/static/js/app.js?v=1.4"></script>
+</body>
+
+</html>
