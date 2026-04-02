@@ -79,8 +79,6 @@ downloadBtn.addEventListener('click', async () => {
     }
 
     try {
-        // Convert raw URLs to rclone format
-        const convertedUrls = convertUrlsToRclone(rawUrls);
         let outputDir = convertSingleUrl(outputDirInput.value.trim());
 
         if (!outputDir) {
@@ -88,10 +86,10 @@ downloadBtn.addEventListener('click', async () => {
             return;
         }
 
-        // Send wrap flag to backend
+        // Send raw URLs to backend (backend will parse gc:ID and scrape titles)
         const wrapCheckbox = document.getElementById('wrapParentFolder');
         const payloadData = {
-            url: convertedUrls,
+            url: urlInput.value,
             output_dir: outputDir,
             wrap: wrapCheckbox ? wrapCheckbox.checked : false
         };

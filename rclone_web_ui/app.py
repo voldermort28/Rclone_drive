@@ -80,15 +80,39 @@ def save_queue(q):
 # ==================== BACKGROUND WORKER ====================
 from rclone_engine import RcloneEngine
 
+def scrape_folder_name_from_url(url):
+    """Helper to get folder name from GDrive page title."""
+    try:
+        import urllib.request
+        # Strip tracking params
+        clean_url = url.split('?')[0]
+        req = urllib.request.Request(clean_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode('utf-8', errors='replace')
+        m = re.search(r'<title[^>]*>(.+?)</title>', html, re.IGNORECASE | re.DOTALL)
+        if m:
+            title = m.group(1).strip()
+            # Remove " - Google Drive" suffixes
+            title = re.sub(r'\s*[-–]\s*Google\s+Drive\s*$', '', title, flags=re.I).strip()
+            # Basic sanitization for paths
+            title = re.sub(r'[\\/*?:"<>|]', '_', title)
+            return title
+    except:
+        pass
+    return ""
+
 def run_real_rclone_job(job):
     global download_state, stop_event
+    
+    # Each job now only contains one source URL (split in start_download)
+    source_list = [s.strip() for s in job['urls'].splitlines() if s.strip()]
     
     download_state.update({
         'status': 'initializing',
         'message': 'Initializing Rclone...',
         'progress': 0,
         'logs': [],
-        'files': [],
+        'files': [{'path': src, 'name': src, 'status': 'pending', 'progress': 0, 'message': ''} for src in source_list],
         'raw_urls': job['urls'],
         'output_dir': job['dest'],
         'job_id': job['id']
@@ -101,25 +125,19 @@ def run_real_rclone_job(job):
         download_state['progress'] = percent
         download_state['message'] = line
         for f in download_state['files']:
-            if f['status'] == 'downloading':
+            if f['status'] == 'pending' or f['status'] == 'downloading':
+                f['status'] = 'downloading'
                 f['progress'] = percent
                 f['message'] = line
                 break
         
     def log_cb(level, msg):
         nonlocal quota_error_hit
-        print(f"[{logging.getLevelName(level)}] {msg}")
         if "downloadQuotaExceeded" in str(msg) or ("quota" in str(msg).lower() and "exceeded" in str(msg).lower()):
             quota_error_hit = True
-            
         download_state['logs'].append({'level': logging.getLevelName(level), 'message': msg})
         if len(download_state['logs']) > 300:
             download_state['logs'] = download_state['logs'][-300:]
-            
-        if level == logging.ERROR:
-            if download_state['status'] != 'error':
-                download_state['status'] = 'error'
-                download_state['message'] = msg
             
     def stop_check():
         return stop_event.is_set()
@@ -128,25 +146,31 @@ def run_real_rclone_job(job):
     
     try:
         download_state['status'] = 'downloading'
-        source_list = [s.strip() for s in job['urls'].splitlines() if s.strip()]
-        download_state['files'] = [{'path': src, 'name': src, 'status': 'pending', 'progress': 0, 'message': ''} for src in source_list]
         
         for i, src in enumerate(source_list):
             if stop_event.is_set() or quota_error_hit:
                 break
             
-            # Wrap parent logic: resolve folder name for EACH source independently
+            # Wrap parent logic: resolve folder name for wrapping
             final_dest = job['dest']
             if job.get('wrap'):
-                try:
+                folder_name = ""
+                # 1. Try scraping from URL
+                if "http" in src:
+                    folder_name = scrape_folder_name_from_url(src)
+                
+                # 2. Fallback to rclone lsjson (even if often fails on this VPS version)
+                if not folder_name:
                     folder_name = engine.get_folder_name(src)
-                    if folder_name:
-                        final_dest = final_dest.rstrip('/') + '/' + folder_name
-                except Exception as e:
-                    log_cb(logging.WARNING, f"Could not get folder name for {src}: {e}")
+                
+                if folder_name:
+                    final_dest = final_dest.rstrip('/') + '/' + folder_name
+            
+            # Update recorder destination in state for final history recording
+            download_state['output_dir'] = final_dest
 
             download_state['files'][i]['status'] = 'downloading'
-            download_state['message'] = f"Copying from {src} to {final_dest}..."
+            download_state['message'] = f"Copying to {final_dest}..."
             
             success = engine.run_copy(src, final_dest)
             
@@ -162,12 +186,8 @@ def run_real_rclone_job(job):
         else:
             if not stop_event.is_set() and not quota_error_hit and download_state['status'] != 'error':
                 download_state['status'] = 'completed'
-                download_state['message'] = 'All copies completed!'
+                download_state['message'] = 'Completed!'
                 download_state['progress'] = 100
-            
-        if stop_event.is_set():
-            download_state['status'] = 'error'
-            download_state['message'] = 'Stopped by user'
             
         return quota_error_hit
 
@@ -194,11 +214,7 @@ def queue_worker_loop():
                 break
                 
         if job_to_run:
-            time.sleep(2)
-            q = load_queue()
-            if not any(j['id'] == job_to_run['id'] for j in q):
-                continue
-                
+            status_prev = download_state['status']
             quota_hit = run_real_rclone_job(job_to_run)
             
             q = load_queue()
@@ -207,10 +223,11 @@ def queue_worker_loop():
             if quota_hit:
                 job_to_run['status'] = 'delayed'
                 job_to_run['execute_at'] = time.time() + (3 * 3600)
-                download_state['status'] = 'error'
-                download_state['message'] = 'Quota Exceeded. Bị dời lại 3 tiếng.'
                 q.append(job_to_run)
+                download_state['status'] = 'error'
+                download_state['message'] = 'Quota Exceeded. Dời lại 3 tiếng.'
             else:
+                # Save to history
                 try:
                     history_record = {
                         'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -228,10 +245,10 @@ def queue_worker_loop():
                         json.dump(histories, f)
                 except Exception as e:
                     print(f"Failed to save history: {e}")
-                    
+            
             save_queue(q)
             time.sleep(5)
-            download_state['status'] = 'idle'  # Reset back to idle
+            download_state['status'] = 'idle'
 
 # Start background worker
 worker_thread = threading.Thread(target=queue_worker_loop, daemon=True)
@@ -251,29 +268,46 @@ def stop_download():
 def start_download():
     data = request.get_json(force=True, silent=True)
     if not data:
-        return jsonify({'error': 'Invalid or missing JSON data'}), 400
+        return jsonify({'error': 'Invalid JSON'}), 400
         
-    urls = data.get('url', '')
+    raw_text = data.get('url', '')
     output_dir = data.get('output_dir', '')
     wrap = data.get('wrap', False)
     
-    if not urls or not output_dir:
+    if not raw_text or not output_dir:
         return jsonify({'error': 'Source and Destination are required'}), 400
 
     q = load_queue()
-    job = {
-        'id': str(uuid.uuid4()),
-        'urls': urls,
-        'dest': output_dir,
-        'wrap': wrap,
-        'status': 'waiting',
-        'execute_at': time.time() - 1, # Immediately eligible
-        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    q.append(job)
-    save_queue(q)
+    lines = [u.strip() for u in raw_text.splitlines() if u.strip()]
     
-    return jsonify({'message': 'Đã thêm vào Hàng đợi (Queue) thành công!'})
+    # Process each line
+    added_count = 0
+    for line in lines:
+        source_path = line
+        original_url = None
+        
+        # Determine if it's a URL or needs conversion
+        if 'drive.google.com' in line or line.startswith('http'):
+            original_url = line
+            fid = extract_drive_id(line)
+            if fid:
+                source_path = f'gc:{fid}'
+        
+        job = {
+            'id': str(uuid.uuid4()),
+            'urls': source_path,  # The path rclone will actually use
+            'original_url': original_url,
+            'dest': output_dir,
+            'wrap': wrap,
+            'status': 'waiting',
+            'execute_at': time.time() - 1,
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        q.append(job)
+        added_count += 1
+    
+    save_queue(q)
+    return jsonify({'message': f'Đã thêm {added_count} job vào hàng đợi!'})
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
@@ -307,7 +341,6 @@ def run_verify_job(source, dest):
     verify_stop_event.clear()
     
     def log_cb(level, msg):
-        print(f"[VERIFY] {msg}")
         verify_state['message'] = str(msg)
         
     def stop_check():
@@ -341,12 +374,12 @@ def start_verify():
         return jsonify({'error': 'Source and Destination are required'}), 400
         
     if verify_state['status'] == 'verifying':
-        return jsonify({'error': 'Một tiến trình kiểm tra đang chạy. Xin vui lòng chờ hoặc dừng.'}), 400
+        return jsonify({'error': 'Một tiến trình kiểm tra đang chạy.'}), 400
         
     t = threading.Thread(target=run_verify_job, args=(source, dest), daemon=True)
     t.start()
     
-    return jsonify({'message': 'Đã bắt đầu tiến trình quét Check & Sync !'})
+    return jsonify({'message': 'Đã bắt đầu quét đối chiếu!'})
 
 @app.route('/api/verify/status', methods=['GET'])
 def get_verify_status():
@@ -356,8 +389,8 @@ def get_verify_status():
 def stop_verify():
     if verify_state['status'] == 'verifying':
         verify_stop_event.set()
-        return jsonify({'message': 'Đang dừng tiến trình quét...'})
-    return jsonify({'message': 'Không có tiến trình nào đang quét'})
+        return jsonify({'message': 'Đang dừng...'})
+    return jsonify({'message': 'Không có tiến trình nào đang chạy'})
 
 # ==================== HISTORY API ====================
 @app.route('/api/history', methods=['GET'])
@@ -407,14 +440,14 @@ def get_config():
 def save_config():
     data = request.get_json(force=True, silent=True)
     if not data or 'content' not in data:
-        return jsonify({'error': 'Missing config content'}), 400
+        return jsonify({'error': 'Missing content'}), 400
     
     conf_path = get_rclone_conf_path()
     try:
         os.makedirs(os.path.dirname(conf_path), exist_ok=True)
         with open(conf_path, 'w') as f:
             f.write(data['content'])
-        return jsonify({'message': 'Config saved successfully', 'path': conf_path})
+        return jsonify({'message': 'Config saved', 'path': conf_path})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -422,19 +455,15 @@ def save_config():
 @app.route('/api/sa/upload', methods=['POST'])
 def upload_sa():
     if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
+        return jsonify({'error': 'No file'}), 400
     f = request.files['file']
     if not f.filename:
         return jsonify({'error': 'Empty filename'}), 400
-    
     os.makedirs(SA_DIR, exist_ok=True)
-    
     try:
         if f.filename.endswith('.zip'):
             tmp_path = os.path.join(SA_DIR, '_upload.zip')
             f.save(tmp_path)
-            
             with zipfile.ZipFile(tmp_path, 'r') as zf:
                 json_count = 0
                 for name in zf.namelist():
@@ -446,48 +475,25 @@ def upload_sa():
                                 dst.write(src.read())
                             json_count += 1
             os.remove(tmp_path)
-            
-            return jsonify({
-                'message': f'Uploaded and extracted {json_count} SA files',
-                'count': json_count,
-                'path': SA_DIR
-            })
-        
+            return jsonify({'message': f'Extracted {json_count} SA files', 'count': json_count})
         elif f.filename.endswith('.json'):
-            target = os.path.join(SA_DIR, f.filename)
-            f.save(target)
-            return jsonify({
-                'message': f'Uploaded SA file: {f.filename}',
-                'count': 1,
-                'path': SA_DIR
-            })
-        
-        else:
-            return jsonify({'error': 'Only .zip or .json files are accepted'}), 400
-    
-    except zipfile.BadZipFile:
-        return jsonify({'error': 'Invalid ZIP file'}), 400
+            f.save(os.path.join(SA_DIR, f.filename))
+            return jsonify({'message': f'Uploaded {f.filename}', 'count': 1})
+        return jsonify({'error': 'Invalid format'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sa/info', methods=['GET'])
 def sa_info():
-    if not os.path.exists(SA_DIR):
-        return jsonify({'count': 0, 'files': [], 'path': SA_DIR})
-    
     sa_files = sorted(glob.glob(os.path.join(SA_DIR, '*.json')))
-    return jsonify({
-        'count': len(sa_files),
-        'files': [os.path.basename(f) for f in sa_files[:20]],
-        'path': SA_DIR
-    })
+    return jsonify({'count': len(sa_files), 'files': [os.path.basename(f) for f in sa_files[:20]]})
 
 @app.route('/api/sa/clear', methods=['POST'])
 def clear_sa():
     if os.path.exists(SA_DIR):
         shutil.rmtree(SA_DIR)
         os.makedirs(SA_DIR, exist_ok=True)
-    return jsonify({'message': 'All SA files cleared'})
+    return jsonify({'message': 'Cleared'})
 
 # ==================== AUTH API ====================
 @app.route('/api/auth', methods=['POST'])
@@ -500,138 +506,86 @@ def auth_check():
 
 # ==================== UTILITY APIs ====================
 def extract_drive_id(url):
-    """Extract Google Drive folder/file ID from various URL formats."""
-    # Clean query params (?fbclid=..., ?usp=sharing, etc.)
     url = url.split('?')[0].split('#')[0]
-    # Match /folders/ID or /d/ID
     m = re.search(r'/folders/([A-Za-z0-9_-]{15,})', url)
-    if m:
-        return m.group(1)
+    if m: return m.group(1)
     m = re.search(r'/d/([A-Za-z0-9_-]{15,})', url)
-    if m:
-        return m.group(1)
-    # Match open?id=ID (handle before query param strip)
+    if m: return m.group(1)
     m = re.search(r'[?&]id=([A-Za-z0-9_-]{15,})', url)
-    if m:
-        return m.group(1)
+    if m: return m.group(1)
     return None
 
 @app.route('/api/util/scrape_title', methods=['GET'])
-def scrape_title():
-    """Fetch the page title of a Google Drive URL to get folder name."""
+def scrape_title_api():
     url = request.args.get('url', '')
-    if not url:
-        return jsonify({'error': 'Missing url param'}), 400
-    try:
-        import urllib.request
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode('utf-8', errors='replace')
-        m = re.search(r'<title[^>]*>(.+?)</title>', html, re.IGNORECASE | re.DOTALL)
-        if m:
-            title = m.group(1).strip()
-            # Google Drive title format: "FolderName - Google Drive"
-            title = re.sub(r'\s*[-–]\s*Google\s+Drive\s*$', '', title).strip()
-            return jsonify({'title': title})
-        return jsonify({'title': ''})
-    except Exception as e:
-        return jsonify({'title': '', 'error': str(e)})
+    title = scrape_folder_name_from_url(url)
+    return jsonify({'title': title})
 
 @app.route('/api/util/parse_url', methods=['POST'])
 def parse_url():
-    """Parse raw Google Drive URLs to rclone gc:ID format."""
     data = request.get_json(force=True, silent=True)
     raw = data.get('url', '') if data else ''
     remote = data.get('remote', 'gc') if data else 'gc'
-    
     results = []
     for line in raw.strip().splitlines():
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         if 'drive.google.com' in line:
             fid = extract_drive_id(line)
-            if fid:
-                results.append({'original': line, 'parsed': f'{remote}:{fid}', 'id': fid})
-            else:
-                results.append({'original': line, 'parsed': line, 'id': None})
+            if fid: results.append({'original': line, 'parsed': f'{remote}:{fid}', 'id': fid})
+            else: results.append({'original': line, 'parsed': line, 'id': None})
         else:
             results.append({'original': line, 'parsed': line, 'id': None})
-    
     return jsonify({'results': results})
 
-# ==================== DRIVE EXPLORER API ====================
+# --- Explorer & Meta ---
 def _make_engine():
-    """Create a lightweight RcloneEngine for utility commands."""
     return RcloneEngine(lambda p, l: None, lambda lv, m: None, lambda: False)
 
 @app.route('/api/explore', methods=['GET'])
 def explore_drive():
     path = request.args.get('path', 'gc:')
-    engine = _make_engine()
-    items = engine.list_dir(path, dirs_only=True)
+    items = _make_engine().list_dir(path, dirs_only=True)
     return jsonify(items)
 
 @app.route('/api/mkdir', methods=['POST'])
 def mkdir_drive():
     data = request.get_json(force=True, silent=True)
-    path = data.get('path', '') if data else ''
-    if not path:
-        return jsonify({'error': 'Missing path'}), 400
-    engine = _make_engine()
-    ok = engine.make_dir(path)
-    if ok:
-        return jsonify({'success': True})
-    return jsonify({'error': 'Failed to create directory'}), 500
+    path = data.get('path', '')
+    if not path: return jsonify({'error': 'Missing path'}), 400
+    if _make_engine().make_dir(path): return jsonify({'success': True})
+    return jsonify({'error': 'Failed'}), 500
 
 @app.route('/api/util/folder_name', methods=['GET'])
-def get_folder_name():
-    """Get real folder name from rclone remote path (e.g. gc:ID -> 'My Folder')."""
+def get_folder_name_api():
     path = request.args.get('path', '')
-    if not path:
-        return jsonify({'name': '', 'error': 'Missing path'}), 400
-    engine = _make_engine()
-    name = engine.get_folder_name(path)
-    return jsonify({'name': name, 'path': path})
+    if not path: return jsonify({'name': ''}), 400
+    name = _make_engine().get_folder_name(path)
+    return jsonify({'name': name})
 
-# ==================== DESTINATION HISTORY ====================
-@app.route('/api/dest_history', methods=['GET'])
-def get_dest_history():
-    if os.path.exists(DEST_HISTORY_FILE):
-        try:
-            with open(DEST_HISTORY_FILE, 'r') as f:
-                return jsonify(json.load(f))
-        except:
-            pass
-    return jsonify([])
-
-@app.route('/api/dest_history', methods=['POST'])
-def save_dest_history():
-    data = request.get_json(force=True, silent=True)
-    entry = data if data else {}
-    if not entry.get('path'):
-        return jsonify({'error': 'Missing path'}), 400
-    
-    history = []
-    if os.path.exists(DEST_HISTORY_FILE):
-        try:
-            with open(DEST_HISTORY_FILE, 'r') as f:
-                history = json.load(f)
-        except:
-            pass
-    
-    # Deduplicate by path
-    history = [h for h in history if h.get('path') != entry['path']]
-    history.insert(0, {
-        'path': entry['path'],
-        'name': entry.get('name', ''),
-        'used_at': datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-    history = history[:20]  # Keep last 20
-    
-    with open(DEST_HISTORY_FILE, 'w') as f:
-        json.dump(history, f)
-    return jsonify({'message': 'Saved'})
+@app.route('/api/dest_history', methods=['GET', 'POST'])
+def handle_dest_history():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True)
+        path = data.get('path') if data else None
+        if not path: return jsonify({'error': 'Missing path'}), 400
+        history = []
+        if os.path.exists(DEST_HISTORY_FILE):
+            try:
+                with open(DEST_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+            except: pass
+        history = [h for h in history if h.get('path') != path]
+        history.insert(0, {'path': path, 'used_at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+        history = history[:20]
+        with open(DEST_HISTORY_FILE, 'w') as f: json.dump(history, f)
+        return jsonify({'message': 'Saved'})
+    else:
+        if os.path.exists(DEST_HISTORY_FILE):
+            try:
+                with open(DEST_HISTORY_FILE, 'r') as f: return jsonify(json.load(f))
+            except: pass
+        return jsonify([])
 
 @app.route('/')
 def index():
@@ -640,8 +594,7 @@ def index():
 @app.errorhandler(500)
 def handle_500(e):
     import traceback
-    return jsonify({'error': f"Internal Server Error: {str(e)}", 'trace': traceback.format_exc()}), 500
+    return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
-# ==================== MAIN ====================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, threaded=True)
