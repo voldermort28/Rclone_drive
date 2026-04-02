@@ -277,27 +277,32 @@ def start_download():
     if not raw_text or not output_dir_raw:
         return jsonify({'error': 'Source and Destination are required'}), 400
 
-    # Clean destination: ensure it's a single gc:ID, remove any accidental duplications or subpaths
-    # If the user pasted a mangled gc:IDgc:ID, we capture only the first one
-    dest_cleaned = output_dir_raw
-    if 'drive.google.com' in output_dir_raw:
-        fid = extract_drive_id(output_dir_raw)
+    # Clean destination: extract exactly <remote>:<id> (no trailing garbage)
+    dest_cleaned = output_dir_raw.strip()
+    if 'drive.google.com' in dest_cleaned:
+        fid = extract_drive_id(dest_cleaned)
         if fid: dest_cleaned = f'gc:{fid}'
     else:
-        # Match the first occurence of name:XXXXXX (at least 15 chars)
-        m = re.search(r'([A-Za-z0-9_-]{2,}:[A-Za-z0-9_-]{15,})', output_dir_raw)
+        # Extract first valid remote:ID pattern, stopping at non-ID chars
+        m = re.match(r'([A-Za-z0-9_-]+:[A-Za-z0-9_-]+)', dest_cleaned)
         if m:
             dest_cleaned = m.group(1)
 
     q = load_queue()
     
-    # Robust splitting: find anything that looks like a Drive URL or gc:ID
-    # This handles links separated by spaces, commas, or newlines
-    links = re.findall(r'(https?://drive\.google\.com/[^\s,]+|gc:[A-Za-z0-9_-]{15,})', raw_text)
+    # Split by lines first, then process each line
+    lines = [u.strip() for u in raw_text.splitlines() if u.strip()]
+    links = []
+    for line in lines:
+        # If it's a Drive URL, extract just the URL part (strip ?fbclid etc)
+        if 'drive.google.com' in line:
+            links.append(line)
+        elif line.startswith('gc:') or ':' in line:
+            # Already rclone format
+            links.append(line)
     
-    # Fallback if regex finds nothing but there was text
     if not links and raw_text.strip():
-        links = [u.strip() for u in raw_text.splitlines() if u.strip()]
+        links = lines
 
     added_count = 0
     for line in links:

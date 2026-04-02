@@ -636,19 +636,70 @@ function renderQueue(records) {
 }
 
 window.removeQueue = function (id) {
-    if (!confirm("Hủy bỏ tiến trình này khỏi hàng đợi?")) return;
-    var xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/queue/remove", true);
-    xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
-    xhr.onreadystatechange = function () {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            loadQueueLight();
-            // Trigger poll to update queue counts quickly
-            if (!isPolling) { isPolling = true; poll(); }
+    showGenericConfirmModal(
+        '🗑️',
+        'Hủy tiến trình?',
+        'Bạn có muốn hủy bỏ tiến trình này khỏi hàng đợi?',
+        'Hủy bỏ',
+        function () {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/queue/remove", true);
+            xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    loadQueueLight();
+                    if (!isPolling) { isPolling = true; poll(); }
+                }
+            };
+            xhr.send(JSON.stringify({ id: id }));
         }
-    };
-    xhr.send(JSON.stringify({ id: id }));
+    );
 };
+
+// Reusable confirm modal
+function showGenericConfirmModal(icon, title, desc, confirmText, onConfirm) {
+    let modal = document.getElementById('genericConfirmModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'genericConfirmModal';
+        modal.className = 'confirm-modal-overlay';
+        modal.innerHTML = `
+            <div class="confirm-modal-box">
+                <div class="confirm-modal-icon" id="gcmIcon"></div>
+                <h3 class="confirm-modal-title" id="gcmTitle"></h3>
+                <p class="confirm-modal-desc" id="gcmDesc"></p>
+                <div class="confirm-modal-actions">
+                    <button type="button" id="gcmCancel" class="btn-secondary confirm-modal-btn">Không</button>
+                    <button type="button" id="gcmConfirm" class="btn-primary confirm-modal-btn" style="background:#ef4444; border-color:#ef4444;"></button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        document.getElementById('gcmCancel').addEventListener('click', () => {
+            modal.classList.remove('active');
+        });
+        modal.addEventListener('click', (ev) => {
+            if (ev.target === modal) modal.classList.remove('active');
+        });
+    }
+
+    document.getElementById('gcmIcon').textContent = icon;
+    document.getElementById('gcmTitle').textContent = title;
+    document.getElementById('gcmDesc').innerHTML = desc;
+    const confirmBtn = document.getElementById('gcmConfirm');
+    confirmBtn.textContent = confirmText;
+
+    // Clone to remove old listeners
+    const newBtn = confirmBtn.cloneNode(true);
+    confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
+    newBtn.addEventListener('click', () => {
+        modal.classList.remove('active');
+        onConfirm();
+    });
+
+    modal.classList.add('active');
+}
 
 // ==================== CONFIG MANAGEMENT ====================
 function loadConfig() {
