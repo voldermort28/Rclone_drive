@@ -271,23 +271,41 @@ def start_download():
         return jsonify({'error': 'Invalid JSON'}), 400
         
     raw_text = data.get('url', '')
-    output_dir = data.get('output_dir', '')
+    output_dir_raw = data.get('output_dir', '')
     wrap = data.get('wrap', False)
     
-    if not raw_text or not output_dir:
+    if not raw_text or not output_dir_raw:
         return jsonify({'error': 'Source and Destination are required'}), 400
 
+    # Clean destination: ensure it's a single gc:ID, remove any accidental duplications or subpaths
+    # If the user pasted a mangled gc:IDgc:ID, we capture only the first one
+    dest_cleaned = output_dir_raw
+    if 'drive.google.com' in output_dir_raw:
+        fid = extract_drive_id(output_dir_raw)
+        if fid: dest_cleaned = f'gc:{fid}'
+    else:
+        # Match the first occurence of name:XXXXXX (at least 15 chars)
+        m = re.search(r'([A-Za-z0-9_-]{2,}:[A-Za-z0-9_-]{15,})', output_dir_raw)
+        if m:
+            dest_cleaned = m.group(1)
+
     q = load_queue()
-    lines = [u.strip() for u in raw_text.splitlines() if u.strip()]
     
-    # Process each line
+    # Robust splitting: find anything that looks like a Drive URL or gc:ID
+    # This handles links separated by spaces, commas, or newlines
+    links = re.findall(r'(https?://drive\.google\.com/[^\s,]+|gc:[A-Za-z0-9_-]{15,})', raw_text)
+    
+    # Fallback if regex finds nothing but there was text
+    if not links and raw_text.strip():
+        links = [u.strip() for u in raw_text.splitlines() if u.strip()]
+
     added_count = 0
-    for line in lines:
+    for line in links:
         source_path = line
         original_url = None
         
-        # Determine if it's a URL or needs conversion
-        if 'drive.google.com' in line or line.startswith('http'):
+        # Normalize source
+        if 'drive.google.com' in line:
             original_url = line
             fid = extract_drive_id(line)
             if fid:
@@ -295,9 +313,9 @@ def start_download():
         
         job = {
             'id': str(uuid.uuid4()),
-            'urls': source_path,  # The path rclone will actually use
+            'urls': source_path,
             'original_url': original_url,
-            'dest': output_dir,
+            'dest': dest_cleaned,
             'wrap': wrap,
             'status': 'waiting',
             'execute_at': time.time() - 1,
