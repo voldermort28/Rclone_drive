@@ -249,46 +249,74 @@ class RcloneEngine:
         finally:
             self.process = None
 
-    @staticmethod
-    def list_dir(path, dirs_only=True):
+    def _get_config_path(self):
+        """Find the rclone config file."""
+        for p in [
+            os.path.expanduser('~/.config/rclone/rclone.conf'),
+            '/root/.config/rclone/rclone.conf',
+        ]:
+            if os.path.exists(p):
+                return p
+        return os.path.expanduser('~/.config/rclone/rclone.conf')
+
+    def _base_cmd(self, subcmd, *args):
+        """Build a base command with binary, config, and SA flags."""
+        binary = self._detect_binary()
+        config_path = self._get_config_path()
+        cmd = [binary, subcmd] + list(args) + ["--config", config_path]
+        sa_dir = self._get_sa_dir()
+        if sa_dir:
+            cmd.extend(["--drive-service-account-file-path", sa_dir])
+        return cmd
+
+    def list_dir(self, path, dirs_only=True):
         """Run rclone lsjson to list directory contents."""
         import json as _json
-        # Detect binary
-        binary = 'rclone'
-        for p in ['/usr/local/bin/gclone', '/usr/bin/gclone', shutil.which('gclone') or '']:
-            if p and os.path.isfile(p):
-                binary = p
-                break
-
-        cmd = [binary, "lsjson", path]
+        path = self._prepare_remote(path)
+        cmd = self._base_cmd("lsjson", path)
         if dirs_only:
             cmd.append("--dirs-only")
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            print(f"[EXPLORER] Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 return _json.loads(result.stdout)
-            return []
-        except Exception:
+            else:
+                print(f"[EXPLORER] stderr: {result.stderr}")
+                return []
+        except Exception as e:
+            print(f"[EXPLORER] Error: {e}")
             return []
 
-    @staticmethod
-    def make_dir(path):
+    def make_dir(self, path):
         """Run rclone mkdir to create a directory on the remote."""
-        binary = 'rclone'
-        for p in ['/usr/local/bin/gclone', '/usr/bin/gclone', shutil.which('gclone') or '']:
-            if p and os.path.isfile(p):
-                binary = p
-                break
-
-        cmd = [binary, "mkdir", path]
+        path = self._prepare_remote(path)
+        cmd = self._base_cmd("mkdir", path)
         try:
+            print(f"[MKDIR] Running: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.returncode == 0
-        except Exception:
+        except Exception as e:
+            print(f"[MKDIR] Error: {e}")
             return False
+
+    def get_folder_name(self, remote_path):
+        """Get the display name of a remote folder using rclone lsjson --stat."""
+        import json as _json
+        path = self._prepare_remote(remote_path)
+        cmd = self._base_cmd("lsjson", path, "--stat")
+        try:
+            print(f"[FOLDER_NAME] Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0:
+                data = _json.loads(result.stdout)
+                # lsjson --stat returns a single object or array with one item
+                if isinstance(data, list) and len(data) > 0:
+                    return data[0].get('Name', '')
+                elif isinstance(data, dict):
+                    return data.get('Name', '')
+            return ''
+        except Exception as e:
+            print(f"[FOLDER_NAME] Error: {e}")
+            return ''
+

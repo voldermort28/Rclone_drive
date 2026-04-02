@@ -549,10 +549,15 @@ def parse_url():
     return jsonify({'results': results})
 
 # ==================== DRIVE EXPLORER API ====================
+def _make_engine():
+    """Create a lightweight RcloneEngine for utility commands."""
+    return RcloneEngine(lambda p, l: None, lambda lv, m: None, lambda: False)
+
 @app.route('/api/explore', methods=['GET'])
 def explore_drive():
     path = request.args.get('path', 'gc:')
-    items = RcloneEngine.list_dir(path, dirs_only=True)
+    engine = _make_engine()
+    items = engine.list_dir(path, dirs_only=True)
     return jsonify(items)
 
 @app.route('/api/mkdir', methods=['POST'])
@@ -561,10 +566,21 @@ def mkdir_drive():
     path = data.get('path', '') if data else ''
     if not path:
         return jsonify({'error': 'Missing path'}), 400
-    ok = RcloneEngine.make_dir(path)
+    engine = _make_engine()
+    ok = engine.make_dir(path)
     if ok:
         return jsonify({'success': True})
     return jsonify({'error': 'Failed to create directory'}), 500
+
+@app.route('/api/util/folder_name', methods=['GET'])
+def get_folder_name():
+    """Get real folder name from rclone remote path (e.g. gc:ID -> 'My Folder')."""
+    path = request.args.get('path', '')
+    if not path:
+        return jsonify({'name': '', 'error': 'Missing path'}), 400
+    engine = _make_engine()
+    name = engine.get_folder_name(path)
+    return jsonify({'name': name, 'path': path})
 
 # ==================== DESTINATION HISTORY ====================
 @app.route('/api/dest_history', methods=['GET'])

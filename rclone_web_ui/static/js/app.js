@@ -88,26 +88,24 @@ downloadBtn.addEventListener('click', async () => {
             return;
         }
 
-        // If "Wrap in Parent Folder" is checked, try to get folder name
+        // If "Wrap in Parent Folder" is checked, get folder name from rclone
         const wrapCheckbox = document.getElementById('wrapParentFolder');
         if (wrapCheckbox && wrapCheckbox.checked) {
-            const lines = rawUrls.split('\n').filter(l => l.trim());
-            // Only wrap if there's a single source (not multi-source)
-            if (lines.length === 1) {
-                const rawLine = lines[0].trim();
-                if (rawLine.indexOf('drive.google.com') > -1) {
-                    try {
-                        downloadBtn.querySelector('.btn-text').textContent = 'Đang lấy tên folder...';
-                        downloadBtn.disabled = true;
-                        const titleResp = await fetch('/api/util/scrape_title?url=' + encodeURIComponent(rawLine));
-                        const titleData = await titleResp.json();
-                        if (titleData.title) {
-                            // Append folder name to destination
-                            outputDir = outputDir.replace(/\/+$/, '') + '/' + titleData.title;
-                        }
-                    } catch (e) {
-                        console.warn('Could not scrape title:', e);
+            const srcLines = convertedUrls.split('\n').filter(l => l.trim());
+            // Process each source line — wrap each one
+            if (srcLines.length >= 1) {
+                downloadBtn.querySelector('.btn-text').textContent = 'Đang lấy tên folder...';
+                downloadBtn.disabled = true;
+                try {
+                    // For single source, get folder name and append to dest
+                    const srcPath = srcLines[0].trim();
+                    const nameResp = await fetch('/api/util/folder_name?path=' + encodeURIComponent(srcPath));
+                    const nameData = await nameResp.json();
+                    if (nameData.name) {
+                        outputDir = outputDir.replace(/\/+$/, '') + '/' + nameData.name;
                     }
+                } catch (e) {
+                    console.warn('Could not get folder name:', e);
                 }
             }
         }
@@ -190,7 +188,8 @@ function showDestDropdown() {
         .then(r => r.json())
         .then(items => {
             if (!items || items.length === 0) {
-                dropdown.style.display = 'none';
+                dropdown.innerHTML = '<div style="padding:14px; text-align:center; color:var(--text-muted); font-size:0.8rem;">📭 Chưa có lịch sử folder đích</div>';
+                dropdown.style.display = 'block';
                 return;
             }
             dropdown.innerHTML = '';
