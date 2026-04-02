@@ -86,6 +86,7 @@ def scrape_folder_name_from_url(url):
         import urllib.request
         # Strip tracking params
         clean_url = url.split('?')[0]
+        logging.info(f"[WRAP] Scraping folder name from: {clean_url}")
         req = urllib.request.Request(clean_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             html = resp.read().decode('utf-8', errors='replace')
@@ -96,9 +97,30 @@ def scrape_folder_name_from_url(url):
             title = re.sub(r'\s*[-–]\s*Google\s+Drive\s*$', '', title, flags=re.I).strip()
             # Basic sanitization for paths
             title = re.sub(r'[\\/*?:"<>|]', '_', title)
+            logging.info(f"[WRAP] Scraped folder name: '{title}'")
             return title
-    except:
-        pass
+        logging.warning(f"[WRAP] No <title> tag found in page")
+    except Exception as e:
+        logging.warning(f"[WRAP] Scrape failed: {e}")
+    return ""
+
+def get_folder_name_via_rclone(gc_path):
+    """Fallback: use rclone lsf to get folder name."""
+    try:
+        import subprocess
+        rclone_bin = '/usr/bin/gclone'
+        # lsf -d shows the folder name itself
+        result = subprocess.run(
+            [rclone_bin, 'lsf', '--dirs-only', '-d', gc_path],
+            capture_output=True, text=True, timeout=15
+        )
+        name = result.stdout.strip().rstrip('/')
+        if name:
+            logging.info(f"[WRAP] rclone lsf got name: '{name}'")
+            return re.sub(r'[\\/*?:"<>|]', '_', name)
+        logging.warning(f"[WRAP] rclone lsf returned empty for {gc_path}")
+    except Exception as e:
+        logging.warning(f"[WRAP] rclone lsf failed: {e}")
     return ""
 
 def run_real_rclone_job(job):
@@ -155,15 +177,22 @@ def run_real_rclone_job(job):
             final_dest = job['dest']
             if job.get('wrap'):
                 folder_name = ""
+                logging.info(f"[WRAP] Wrap=True for src={src}, original_url={job.get('original_url')}")
+                
                 # 1. Try scraping from original URL (src is gc:ID, not a URL)
                 original_url = job.get('original_url', '')
                 if original_url:
                     folder_name = scrape_folder_name_from_url(original_url)
                 
-                # 2. Fallback to rclone lsjson
+                # 2. Fallback to rclone lsf -d
+                if not folder_name:
+                    folder_name = get_folder_name_via_rclone(src)
+                
+                # 3. Final fallback to engine.get_folder_name (lsjson)
                 if not folder_name:
                     folder_name = engine.get_folder_name(src)
                 
+                logging.info(f"[WRAP] Resolved folder_name='{folder_name}' for {src}")
                 if folder_name:
                     final_dest = final_dest.rstrip('/') + '/' + folder_name
             
