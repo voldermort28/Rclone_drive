@@ -68,8 +68,13 @@ header {
     color: var(--primary);
 }
 
-.w-6 { width: 2rem; }
-.h-6 { height: 2rem; }
+.w-6 {
+    width: 2rem;
+}
+
+.h-6 {
+    height: 2rem;
+}
 
 h1 {
     font-size: 2rem;
@@ -142,8 +147,15 @@ h1 {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* ==================== CARDS ==================== */
@@ -211,8 +223,13 @@ textarea:focus {
     margin-top: 0.5rem;
 }
 
-.btn-primary:hover { background: var(--primary-hover); }
-.btn-primary:active { transform: scale(0.98); }
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
 
 .btn-secondary {
     background: transparent;
@@ -249,8 +266,13 @@ textarea:focus {
     margin-top: 0.5rem;
 }
 
-.btn-stop:hover { background-color: #dc2626; }
-.btn-stop:active { transform: scale(0.98); }
+.btn-stop:hover {
+    background-color: #dc2626;
+}
+
+.btn-stop:active {
+    transform: scale(0.98);
+}
 
 /* ==================== STATUS SECTION ==================== */
 
@@ -262,8 +284,15 @@ textarea:focus {
 }
 
 @keyframes slideUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .status-header {
@@ -362,7 +391,9 @@ textarea:focus {
     vertical-align: middle;
 }
 
-.files-table tr:last-child td { border-bottom: none; }
+.files-table tr:last-child td {
+    border-bottom: none;
+}
 
 .status-badge {
     display: inline-block;
@@ -372,9 +403,20 @@ textarea:focus {
     font-weight: 500;
 }
 
-.status-completed { color: var(--success); background: rgba(16, 185, 129, 0.1); }
-.status-skipped { color: var(--warning); background: rgba(245, 158, 11, 0.1); }
-.status-error { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+.status-completed {
+    color: var(--success);
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.status-skipped {
+    color: var(--warning);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.status-error {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+}
 
 .tbl-progress-bar {
     width: 100%;
@@ -400,7 +442,9 @@ textarea:focus {
     word-break: break-all;
 }
 
-.file-icon { color: var(--text-muted); }
+.file-icon {
+    color: var(--text-muted);
+}
 
 /* ==================== CONFIG SECTION ==================== */
 
@@ -455,8 +499,13 @@ textarea:focus {
     min-height: 1.5rem;
 }
 
-.config-status.success { color: var(--success); }
-.config-status.error { color: var(--danger); }
+.config-status.success {
+    color: var(--success);
+}
+
+.config-status.error {
+    color: var(--danger);
+}
 
 /* ==================== SA UPLOAD ==================== */
 
@@ -519,14 +568,106 @@ textarea:focus {
 
 /* ==================== SCROLLBAR ==================== */
 
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+/* ==================== CONFIRM MODAL ==================== */
+
+.confirm-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    justify-content: center;
+    align-items: center;
+}
+
+.confirm-modal-overlay.active {
+    display: flex;
+}
+
+.confirm-modal-box {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 28px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(99, 102, 241, 0.1);
+    animation: modalSlideIn 0.25s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.confirm-modal-icon {
+    font-size: 2.5rem;
+    margin-bottom: 12px;
+}
+
+.confirm-modal-title {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 8px;
+}
+
+.confirm-modal-desc {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-bottom: 24px;
+}
+
+.confirm-modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.confirm-modal-btn {
+    padding: 10px 24px !important;
+    font-size: 0.9rem !important;
+    border-radius: 8px !important;
+    min-width: 100px;
+    cursor: pointer;
+    font-weight: 500;
+}
 
 /* ==================== RESPONSIVE ==================== */
 
 @media (max-width: 600px) {
-    body { padding-top: 30px; }
-    .container { padding: 1rem; }
-    .config-actions { flex-direction: column; }
+    body {
+        padding-top: 30px;
+    }
+
+    .container {
+        padding: 1rem;
+    }
+
+    .config-actions {
+        flex-direction: column;
+    }
 }

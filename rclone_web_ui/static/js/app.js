@@ -140,17 +140,59 @@ downloadBtn.addEventListener('click', async () => {
     }
 });
 
-stopBtn.addEventListener('click', async () => {
-    if (!confirm('Bạn có muốn dừng tiến trình ĐANG CHẠY ngay lập tức? (KHÔNG xóa queue)')) return;
-    try {
-        stopBtn.disabled = true;
-        stopBtn.querySelector('.btn-text').textContent = 'Đang dừng...';
-        await fetch('/api/stop', { method: 'POST' });
-    } catch (e) {
-        console.error(e);
-        alert('Lỗi khi gửi lệnh dừng!');
-    }
+stopBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showStopConfirmModal();
 });
+
+function showStopConfirmModal() {
+    // Create modal if it doesn't exist yet
+    let modal = document.getElementById('stopConfirmModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'stopConfirmModal';
+        modal.className = 'confirm-modal-overlay';
+        modal.innerHTML = `
+            <div class="confirm-modal-box">
+                <div class="confirm-modal-icon">⚠️</div>
+                <h3 class="confirm-modal-title">Dừng tiến trình?</h3>
+                <p class="confirm-modal-desc">Bạn có muốn dừng tiến trình <strong>ĐANG CHẠY</strong> ngay lập tức?<br><small style="color:var(--text-muted);">(Các job trong Queue sẽ KHÔNG bị xóa)</small></p>
+                <div class="confirm-modal-actions">
+                    <button type="button" id="stopModalCancel" class="btn-secondary confirm-modal-btn">Hủy</button>
+                    <button type="button" id="stopModalConfirm" class="btn-primary confirm-modal-btn" style="background:#ef4444; border-color:#ef4444;">Dừng ngay</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Wire up cancel
+        document.getElementById('stopModalCancel').addEventListener('click', () => {
+            modal.classList.remove('active');
+        });
+
+        // Wire up confirm
+        document.getElementById('stopModalConfirm').addEventListener('click', async () => {
+            modal.classList.remove('active');
+            try {
+                stopBtn.disabled = true;
+                stopBtn.querySelector('.btn-text').textContent = 'Đang dừng...';
+                await fetch('/api/stop', { method: 'POST' });
+            } catch (err) {
+                console.error(err);
+                alert('Lỗi khi gửi lệnh dừng!');
+            }
+        });
+
+        // Click overlay to dismiss
+        modal.addEventListener('click', (ev) => {
+            if (ev.target === modal) modal.classList.remove('active');
+        });
+    }
+
+    // Show it
+    modal.classList.add('active');
+}
 
 // ==================== DESTINATION HISTORY ====================
 function saveDestHistory(path) {
