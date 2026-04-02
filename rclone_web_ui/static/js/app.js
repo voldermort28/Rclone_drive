@@ -219,19 +219,35 @@ function showDestDropdown() {
             dropdown.innerHTML = '';
             items.forEach(item => {
                 const row = document.createElement('div');
-                row.style.cssText = 'padding:10px 14px; cursor:pointer; font-size:0.85rem; border-bottom: 1px solid var(--border-color); transition: background 0.15s;';
-                row.innerHTML = '<div style="color:var(--text-primary); font-weight:500;">' + item.path + '</div>' +
-                    '<div style="color:var(--text-muted); font-size:0.75rem;">' + (item.used_at || '') + '</div>';
-                row.addEventListener('mouseenter', () => row.style.background = 'rgba(96,165,250,0.1)');
-                row.addEventListener('mouseleave', () => row.style.background = 'transparent');
-                row.addEventListener('click', () => {
+                row.style.cssText = 'padding:10px 14px; cursor:pointer; font-size:0.85rem; border-bottom: 1px solid #334155; transition: background 0.15s; background: #1e293b; z-index: 10000;';
+
+                let folderName = 'Thư mục đích';
+                let shortPath = item.path;
+
+                const parts = item.path.split('/');
+                if (parts.length > 1) {
+                    folderName = parts[parts.length - 1];
+                } else if (item.path.indexOf(':') > -1) {
+                    folderName = "Gốc (" + item.path.split(':')[0] + ")";
+                }
+
+                if (shortPath.length > 35) {
+                    shortPath = shortPath.substring(0, 15) + '...' + shortPath.substring(shortPath.length - 15);
+                }
+
+                row.innerHTML = '<div style="color:#60a5fa; font-weight:600; margin-bottom:4px;">' + folderName + '</div>' +
+                    '<div style="color:#94a3b8; font-size:0.75rem;">' + shortPath + '</div>';
+                row.addEventListener('mouseenter', () => row.style.background = '#334155');
+                row.addEventListener('mouseleave', () => row.style.background = '#1e293b');
+                row.addEventListener('click', (e) => {
+                    e.stopPropagation();
                     outputDirInput.value = item.path;
                     localStorage.setItem('rclone_dest', item.path);
                     dropdown.style.display = 'none';
                 });
                 dropdown.appendChild(row);
             });
-            dropdown.style.display = 'block';
+            dropdown.style.cssText = 'display:block; position:absolute; z-index:9999; top:100%; left:0; right:0; max-height:220px; overflow-y:auto; background:#1e293b; border:1px solid #334155; border-radius:0 0 8px 8px; box-shadow:0 8px 20px rgba(0,0,0,0.5);';
         })
         .catch(() => { });
 }
@@ -629,7 +645,7 @@ function renderQueue(records) {
             '<td style="word-break: break-all; max-width: 300px;">' + urls + '</td>' +
             '<td style="word-break: break-all;">' + (rec.dest || 'N/A') + '</td>' +
             '<td>' + statusHtml + '</td>' +
-            '<td><button class="btn-secondary" style="padding: 4px 8px; font-size: 12px; border-color: #ef4444; color: #ef4444;" onclick="removeQueue(\'' + rec.id + '\')">Hủy</button></td>';
+            '<td><button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 12px; border-color: #ef4444; color: #ef4444;" onclick="event.stopPropagation(); removeQueue(\'' + rec.id + '\')">Hủy</button></td>';
 
         tbody.appendChild(row);
     });
@@ -676,12 +692,12 @@ function showGenericConfirmModal(icon, title, desc, confirmText, onConfirm) {
         `;
         document.body.appendChild(modal);
 
-        document.getElementById('gcmCancel').addEventListener('click', () => {
+        document.getElementById('gcmCancel').addEventListener('click', (e) => {
+            e.stopPropagation();
             modal.classList.remove('active');
         });
-        modal.addEventListener('click', (ev) => {
-            if (ev.target === modal) modal.classList.remove('active');
-        });
+        // Removed overlay click-to-dismiss to prevent accidental flashes
+
     }
 
     document.getElementById('gcmIcon').textContent = icon;
