@@ -155,3 +155,140 @@ class RcloneEngine:
             return False
         finally:
             self.process = None
+
+    def run_verify(self, source, destination, verify_callback):
+        """
+        Runs `rclone check` and streams results to verify_callback.
+        It parses the output of `--combined -` to detect missing/differing files.
+        """
+        binary = self._detect_binary()
+        source = self._prepare_remote(source)
+        destination = self._prepare_remote(destination)
+        
+        cmd = [
+            binary, "check", source, destination,
+            "--size-only",
+            "--stats=1s",
+            "--stats-one-line",
+            "--combined", "-"
+        ]
+        
+        sa_dir = self._get_sa_dir()
+        if sa_dir:
+            cmd.extend(["--drive-service-account-file-path", sa_dir])
+            
+        self.log_callback(logging.INFO, f"Executing VERIFY command: {' '.join(cmd)}")
+        
+        stats = {
+            'total_missing': 0,
+            'total_differ': 0,
+            'total_error': 0,
+            'files': []
+        }
+        
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                universal_newlines=True,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            if self.process and self.process.stdout:
+                for line in self.process.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                        
+                    # Parse combined combined log format
+                    if line.startswith('+ '):
+                        stats['total_missing'] += 1
+                        if len(stats['files']) < 150:
+                            stats['files'].append({"type": "missing", "path": line[2:]})
+                    elif line.startswith('* '):
+                        stats['total_differ'] += 1
+                        if len(stats['files']) < 150:
+                            stats['files'].append({"type": "differ", "path": line[2:]})
+                    elif line.startswith('! '):
+                        stats['total_error'] += 1
+                        if len(stats['files']) < 150:
+                            stats['files'].append({"type": "error", "path": line[2:]})
+                    elif line.startswith('= ') or line.startswith('- '):
+                        pass # Ignore identical or missing on source
+                    else:
+                        self.log_callback(logging.DEBUG, f"[VERIFY] {line}")
+                        
+                    if self.stop_checker():
+                        if self.process:
+                            self.process.terminate()
+                        break
+                        
+                self.process.wait()
+                
+                # After completion
+                if self.process.returncode == 0 or self.process.returncode == 1:
+                    # rclone check returns 1 if differences were found, which is expected
+                    self.log_callback(logging.INFO, f"Verify completed with missing: {stats['total_missing']}, differ: {stats['total_differ']}")
+                    verify_callback(True, stats)
+                    return True
+                elif self.stop_checker():
+                    verify_callback(False, stats, "Bị dừng bởi người dùng")
+                    return False
+                else:
+                    verify_callback(False, stats, f"Lỗi hệ thống (Mã lỗi {self.process.returncode})")
+                    return False
+            return False
+
+        except Exception as e:
+            self.log_callback(logging.ERROR, f"Failed to run verify: {e}")
+            verify_callback(False, stats, str(e))
+            return False
+        finally:
+            self.process = None
+
+    @staticmethod
+    def list_dir(path, dirs_only=True):
+        """Run rclone lsjson to list directory contents."""
+        import json as _json
+        # Detect binary
+        binary = 'rclone'
+        for p in ['/usr/local/bin/gclone', '/usr/bin/gclone', shutil.which('gclone') or '']:
+            if p and os.path.isfile(p):
+                binary = p
+                break
+
+        cmd = [binary, "lsjson", path]
+        if dirs_only:
+            cmd.append("--dirs-only")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                return _json.loads(result.stdout)
+            return []
+        except Exception:
+            return []
+
+    @staticmethod
+    def make_dir(path):
+        """Run rclone mkdir to create a directory on the remote."""
+        binary = 'rclone'
+        for p in ['/usr/local/bin/gclone', '/usr/bin/gclone', shutil.which('gclone') or '']:
+            if p and os.path.isfile(p):
+                binary = p
+                break
+
+        cmd = [binary, "mkdir", path]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            return result.returncode == 0
+        except Exception:
+            return False

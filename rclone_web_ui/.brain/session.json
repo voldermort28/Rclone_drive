@@ -1,0 +1,18 @@
+{
+  "updated_at": "2026-03-26T00:22:00Z",
+  "working_on": {
+    "feature": "Verify & Sync + Live Console",
+    "status": "Completed - Deployed to VPS",
+    "files": ["app.py", "rclone_engine.py", "static/js/app.js", "templates/index.html"],
+    "notes": "System is now high-volume ready with smart quota retry and live progress."
+  },
+  "recent_changes": [
+    { "type": "backend", "desc": "Implemented rclone check --combined parsing logic" },
+    { "type": "frontend", "desc": "Added Verify Tab and Rclone Console UI widget" },
+    { "type": "devops", "desc": "Deployed to CentOS 7 VPS via rsync + sshpass" }
+  ],
+  "decisions_made": [
+    { "decision": "Use --stats=1s for verify", "reason": "Necessary for live UI feedback on large directories" },
+    { "decision": "JSON persistence for queue", "reason": "Simple and survives app crashes or reloads" }
+  ]
+}

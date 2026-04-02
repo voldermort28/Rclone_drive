@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "schema_version": "1.1.0",
+    "awf_version": "3.3.0",
+    "last_saved": "2026-03-26T00:20:00Z"
+  },
+  "project": {
+    "name": "GDriveDL - Rclone VPS Web Controller",
+    "type": "Flask + Rclone Transfer Management",
+    "status": "Beta - Core Features Implemented"
+  },
+  "tech_stack": {
+    "frontend": "Vanilla JS + CSS (Liquid Theme)",
+    "backend": "Python 3.9 + Flask",
+    "transfer_engine": "Rclone binary (subprocess)"
+  },
+  "features": [
+    {
+      "name": "Smart Queue",
+      "description": "Persistent asynchronous queue for file transfers using queue.json",
+      "status": "Implemented"
+    },
+    {
+      "name": "Smart Auto-Retry",
+      "description": "Automatic 3-hour backoff when detecting Google Drive 403 downloadQuotaExceeded errors",
+      "status": "Implemented"
+    },
+    {
+      "name": "Verify & Sync",
+      "description": "Rclone-based file comparison with real-time discrepancy reporting and one-click fix",
+      "status": "Implemented"
+    },
+    {
+      "name": "Real-time Console",
+      "description": "Live streaming of Rclone subprocess output to web-based terminal widget",
+      "status": "Implemented"
+    }
+  ],
+  "api_endpoints": [
+    { "path": "/api/download", "method": "POST", "desc": "Add URLs to transfer queue" },
+    { "path": "/api/status", "method": "GET", "desc": "Polling current transfer and queue stats" },
+    { "path": "/api/stop", "method": "POST", "desc": "Kill current active Rclone process" },
+    { "path": "/api/history", "method": "GET", "desc": "Retrieve past transfer records" },
+    { "path": "/api/verify", "method": "POST", "desc": "Trigger rclone check between source and dest" },
+    { "path": "/api/verify/status", "method": "GET", "desc": "Poll progress and results of verification" }
+  ],
+  "knowledge_items": {
+    "patterns": ["Asynchronous Thread Worker", "State persistence via JSON", "Subprocess stdout parsing"],
+    "vps_info": {
+      "ip": "116.118.48.68",
+      "root_dir": "/www/wwwroot/rclone.laboon.vn/"
+    }
+  }
+}

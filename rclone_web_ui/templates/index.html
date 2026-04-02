@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/styles.css?v=1.1">
+    <link rel="stylesheet" href="/static/css/styles.css?v=2.0">
 </head>
 
 <body>
@@ -16,7 +16,7 @@
 
     <main class="container">
         <header>
-            <div class="logo">
+            <div class="logo" id="headerLogo" title="Triple-click to access Config">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
                     <path
                         d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z" />
@@ -29,15 +29,33 @@
         <!-- ========== TABS NAVIGATION ========== -->
         <nav class="tabs-nav">
             <button class="tab-btn active" data-tab="transfer">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
                 Transfer
             </button>
-            <button class="tab-btn" data-tab="config">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <button class="tab-btn" data-tab="verify">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                    <polyline points="9 11 12 14 22 4" />
+                </svg>
+                Kiểm tra (Verify)
+            </button>
+            <!-- Config tab is hidden by default, unlocked by triple-clicking the logo -->
+            <button class="tab-btn" data-tab="config" id="tabBtnConfig" style="display: none;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
                 Cấu hình
             </button>
             <button class="tab-btn" data-tab="history">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                </svg>
                 Lịch sử
             </button>
         </nav>
@@ -46,19 +64,43 @@
         <div class="tab-content active" id="tab-transfer">
             <section class="card input-section">
                 <div class="input-group">
-                    <label for="url">Source Remotes/URLs (Mỗi dòng 1 link)</label>
-                    <textarea id="url" rows="5" placeholder="VD: gc:{source_folder_id} hoặc https://drive.google.com/..."
+                    <label for="url">Source (Mỗi dòng 1 link Google Drive hoặc gc:...)</label>
+                    <textarea id="url" rows="5"
+                        placeholder="Paste link Google Drive hoặc gc:{folder_id} ở đây...&#10;VD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD: gc:1glGXeitkt0wlSvT4polGm50MVBDJAWuz"
                         autocomplete="off"></textarea>
+                    <div style="margin-top: 8px;">
+                        <label
+                            style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">
+                            <input type="checkbox" id="wrapParentFolder" checked>
+                            📁 Giữ thư mục gốc (tạo folder cha trong đích)
+                        </label>
+                    </div>
                 </div>
 
                 <div class="input-group">
-                    <label for="output_dir">Destination Remote (Nơi nhận)</label>
-                    <input type="text" id="output_dir" placeholder="VD: gc:{destination_folder_id}">
+                    <label for="output_dir">Destination (Nơi nhận)</label>
+                    <div style="position: relative;">
+                        <input type="text" id="output_dir" placeholder="Paste link Google Drive hoặc gc:{folder_id}..."
+                            autocomplete="off">
+                        <div id="destDropdown"
+                            style="display:none; position: absolute; z-index: 50; top: 100%; left: 0; right: 0; max-height: 200px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 0 0 8px 8px; box-shadow: 0 8px 20px rgba(0,0,0,.3);">
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button id="browseDestBtn" class="btn-secondary"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
-                <button id="downloadBtn" class="btn-primary">
-                    <span class="btn-text">Bắt đầu Copy</span>
-                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button id="downloadBtn" class="btn-primary" style="flex: 2;">
+                        <span class="btn-text">Thêm vào Queue (Copy)</span>
+                    </button>
+                    <button id="stopBtn" class="btn-secondary"
+                        style="flex: 1; display: none; border-color: #ef4444; color: #ef4444;">
+                        <span class="btn-text">Dừng tiến trình đang chạy</span>
+                    </button>
+                </div>
             </section>
 
             <section class="card status-section" id="statusSection" style="display: none;">
@@ -75,6 +117,18 @@
                         <span id="progressPercent">0%</span>
                         <span id="sizeInfo"></span>
                     </div>
+                </div>
+
+                <div class="console-container"
+                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 20px; border: 1px solid #1e293b; overflow: hidden;">
+                    <div
+                        style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace; display: flex; justify-content: space-between;">
+                        <span>&gt;_ Rclone Console</span>
+                        <span id="consoleToggle" style="cursor: pointer; color: #38bdf8;">[ Thu gọn ]</span>
+                    </div>
+                    <div id="transferConsole"
+                        style="padding: 12px; margin: 0; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 100px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
+                        Đang chờ dữ liệu console...</div>
                 </div>
 
                 <div class="files-container">
@@ -100,20 +154,98 @@
             </section>
         </div>
 
-        <!-- ========== TAB: CONFIG ========== -->
+        <!-- ========== TAB: VERIFY & SYNC ========== -->
+        <div class="tab-content" id="tab-verify">
+            <section class="card input-section">
+                <div class="config-header" style="margin-bottom: 20px;">
+                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                            <polyline points="9 11 12 14 22 4" />
+                        </svg> Đối chiếu & Chép bù</h3>
+                    <p class="config-desc">So sánh dung lượng thư mục nguồn và đích. Hiển thị danh sách file bị sót/lệch
+                        dung lượng và tùy chọn chép bù.</p>
+                </div>
+
+                <div class="input-group">
+                    <label for="verify_source">Source Remote (Thư mục Gốc)</label>
+                    <input type="text" id="verify_source" placeholder="VD: gc:{source_folder_id}">
+                </div>
+
+                <div class="input-group">
+                    <label for="verify_dest">Destination Remote (Thư mục nhận file)</label>
+                    <input type="text" id="verify_dest" placeholder="VD: gc:{destination_folder_id}">
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button id="btnVerifyScan" class="btn-primary" style="flex: 2; background-color: #6366f1;">
+                        <span class="btn-text">Bắt đầu quét đối chiếu</span>
+                    </button>
+                    <button id="btnVerifyStop" class="btn-secondary"
+                        style="flex: 1; display: none; border-color: #ef4444; color: #ef4444;">
+                        <span class="btn-text">Dừng quét</span>
+                    </button>
+                </div>
+            </section>
+
+            <section class="card status-section" id="verifyStatusSection" style="display: none;">
+                <div class="status-header">
+                    <h3 id="verifyMessageText">Đang quét...</h3>
+                    <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 5px;">
+                        <span id="verifyMissingCount" style="color: #ef4444; font-weight: 500; margin-right: 15px;">👉
+                            Thiếu: 0 file</span>
+                        <span id="verifyDifferCount" style="color: #f59e0b; font-weight: 500; margin-right: 15px;">👉
+                            Lệch dung lượng: 0 file</span>
+                        <span id="verifyErrorCount" style="color: #64748b; font-weight: 500;">👉 Lỗi kiểm tra: 0</span>
+                    </div>
+                </div>
+
+                <div class="files-container" style="margin-top: 20px;">
+                    <div class="files-header"
+                        style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3>Chi tiết lệch (Top 150)</h3>
+                        <button id="btnVerifyFix" class="btn-primary"
+                            style="padding: 6px 16px; font-size: 0.9rem; display: none;">
+                            🚀 Chép Bù (Sync)
+                        </button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="files-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 100px;">Loại lỗi</th>
+                                    <th>Đường dẫn file (Path)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="verifyListBody">
+                                <!-- Verify results will appear here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ========== TAB: CONFIG (hidden by default) ========== -->
         <div class="tab-content" id="tab-config">
             <!-- Rclone Config Section -->
             <section class="card config-section">
                 <div class="config-header">
                     <h3>⚙️ Cấu hình Rclone</h3>
-                    <p class="config-desc">Chỉnh sửa nội dung file <code>rclone.conf</code> để thêm tài khoản Google Drive.</p>
+                    <p class="config-desc">Chỉnh sửa nội dung file <code>rclone.conf</code> để thêm tài khoản Google
+                        Drive.</p>
                 </div>
                 <div class="input-group">
-                    <textarea id="configEditor" rows="12" placeholder="Đang tải cấu hình..." spellcheck="false" class="code-editor"></textarea>
+                    <textarea id="configEditor" rows="12" placeholder="Đang tải cấu hình..." spellcheck="false"
+                        class="code-editor"></textarea>
                 </div>
                 <div class="config-actions">
                     <button id="loadConfigBtn" class="btn-secondary">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                        </svg>
                         Tải lại
                     </button>
                     <button id="saveConfigBtn" class="btn-primary">
@@ -127,12 +259,18 @@
             <section class="card config-section" style="margin-top: 1.5rem;">
                 <div class="config-header">
                     <h3>🔑 Service Accounts (Vượt 750GB)</h3>
-                    <p class="config-desc">Upload file <code>.zip</code> chứa các file JSON của Service Account. Hệ thống sẽ tự động giải nén và sử dụng để xoay vòng khi copy.</p>
+                    <p class="config-desc">Upload file <code>.zip</code> chứa các file JSON của Service Account. Hệ
+                        thống sẽ tự động giải nén và sử dụng để xoay vòng khi copy.</p>
                 </div>
                 <div class="sa-upload-area" id="saUploadArea">
                     <input type="file" id="saFileInput" accept=".zip,.json" style="display: none;">
                     <div class="sa-upload-content">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
                         <p>Kéo thả file <strong>.zip</strong> vào đây hoặc <span class="sa-browse">chọn file</span></p>
                     </div>
                 </div>
@@ -141,20 +279,56 @@
             </section>
         </div>
 
-        <!-- ========== TAB: HISTORY ========== -->
+        <!-- ========== TAB: HISTORY & QUEUE ========== -->
         <div class="tab-content" id="tab-history">
+            <!-- Queue Section -->
+            <section class="card config-section" style="margin-bottom: 1.5rem;" id="queueSection">
+                <div class="config-header">
+                    <h3>⏳ Hàng Đợi (Smart Queue)</h3>
+                    <p class="config-desc">Các tiến trình xếp hàng đợi tới lượt, hoặc đang chờ tự động thử lại do lỗi
+                        Quota.</p>
+                </div>
+
+                <div class="table-responsive" style="margin-top: 15px;">
+                    <table class="files-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 150px;">Thời gian (Dự kiến)</th>
+                                <th>Nguồn (URL)</th>
+                                <th>Đích (Dest)</th>
+                                <th style="width: 150px;">Trạng thái</th>
+                                <th style="width: 80px;">Hành động</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queueListBody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; padding: 20px; color: var(--text-muted);">
+                                    Không có tiến trình nào đang chờ</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- History Section -->
             <section class="card config-section">
                 <div class="config-header" style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <h3>🕒 Lịch sử sao chép</h3>
                         <p class="config-desc">Logs các tiến trình đã hoàn tất, bị lỗi hoặc bị dừng.</p>
                     </div>
-                    <button id="clearHistoryBtn" class="btn-secondary" style="border: 1px solid #ef4444; color: #ef4444;">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    <button id="clearHistoryBtn" class="btn-secondary"
+                        style="border: 1px solid #ef4444; color: #ef4444;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                            </path>
+                        </svg>
                         Xóa lịch sử
                     </button>
                 </div>
-                
+
                 <div class="table-responsive" style="margin-top: 15px;">
                     <table class="files-table">
                         <thead>
@@ -166,15 +340,45 @@
                             </tr>
                         </thead>
                         <tbody id="historyListBody">
-                            <tr><td colspan="4" style="text-align: center; padding: 20px;">Đang tải...</td></tr>
+                            <tr>
+                                <td colspan="4" style="text-align: center; padding: 20px;">Đang tải...</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
             </section>
         </div>
+
+        <!-- ========== DRIVE EXPLORER MODAL ========== -->
+        <div id="driveExplorerModal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:1000; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); justify-content:center; align-items:center;">
+            <div
+                style="background: var(--bg-card); border:1px solid var(--border-color); border-radius:12px; width:90%; max-width:600px; max-height:80vh; display:flex; flex-direction:column; box-shadow: 0 20px 60px rgba(0,0,0,.5);">
+                <div
+                    style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; font-size:1.1rem;">📂 Duyệt Drive</h3>
+                    <button id="explorerCloseBtn" class="btn-secondary" style="padding:4px 10px; font-size:0.85rem;">✕
+                        Đóng</button>
+                </div>
+                <div id="explorerBreadcrumb"
+                    style="padding:10px 20px; font-size:0.85rem; color:var(--text-muted); background: rgba(255,255,255,.03); border-bottom: 1px solid var(--border-color); overflow-x: auto; white-space: nowrap;">
+                    gc:
+                </div>
+                <div id="explorerList" style="flex:1; overflow-y:auto; min-height:200px; padding: 8px 0;">
+                    <div style="text-align:center; padding:30px; color:var(--text-muted);">Đang tải...</div>
+                </div>
+                <div style="padding:12px 20px; border-top:1px solid var(--border-color); display:flex; gap:8px;">
+                    <button id="explorerNewFolderBtn" class="btn-secondary" style="flex:1; padding:8px;">➕ Tạo thư mục
+                        mới</button>
+                    <button id="explorerSelectBtn" class="btn-primary" style="flex:1; padding:8px;">✅ Chọn thư mục
+                        này</button>
+                </div>
+            </div>
+        </div>
+
     </main>
 
-    <script src="/static/js/app.js?v=1.4"></script>
+    <script src="/static/js/app.js?v=2.0"></script>
 </body>
 
 </html>
