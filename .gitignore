@@ -16,3 +16,14 @@ venv/
 
 # Logs
 *.log
+
+# Personal/Private Data
+rclone_web_ui/sa/
+rclone_web_ui/history.json
+rclone_web_ui/queue.json
+rclone_web_ui/dest_history.json
+rclone_web_ui/.brain/
+.brain/
+.gemini/
+brain/
+*.heapsnapshot

@@ -1,0 +1,40 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to VPS via SCP
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT }}
+          source: "rclone_web_ui/*"
+          target: "/www/wwwroot/rclone.laboon.vn/"
+          strip_components: 1
+          rm: false
+
+      - name: Post-deployment Restart
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            # Kill existing app
+            pkill -f 'python3 app.py' || true
+            sleep 2
+            # Start app in background
+            cd /www/wwwroot/rclone.laboon.vn/
+            nohup python3 app.py > /tmp/gdrivedl.log 2>&1 &
+            echo "App restarted successfully!"
