@@ -31,11 +31,15 @@ jobs:
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             cd /www/wwwroot/rclone.laboon.vn/
-            echo "Current directory files:"
-            ls -F
-            # Restart app
-            pkill -f 'python3 app.py' || true
+            # Kill existing app safely (avoid killing this session)
+            PID=$(pgrep -f "python3 app.py" | grep -v "$$" || true)
+            if [ -n "$PID" ]; then
+              echo "Killing existing process: $PID"
+              kill -9 $PID || true
+            fi
             sleep 2
+            # Start app and detach
             nohup python3 app.py > /tmp/gdrivedl.log 2>&1 &
-            echo "Deployment finished and app restarted."
+            sleep 2
+            echo "Deployment finished. App should be running in background."
 
