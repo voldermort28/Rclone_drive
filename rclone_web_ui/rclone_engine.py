@@ -37,25 +37,25 @@ class RcloneEngine:
     def _prepare_remote(self, path):
         """
         Special handling for Google Drive IDs in gclone.
-        If path matches 'remote:ID' (no slashes), wrap the ID in curly braces
-        like 'remote:{ID}' for gclone to treat it as a root folder.
+        If path matches 'remote:ID[/subfolder]', wrap the ID in curly braces
+        like 'remote:{ID}/subfolder' for gclone to treat it as a root folder.
         """
         if not path:
             return path
             
-        # Match 'name:id' where id is likely a GDrive ID (alphanumeric, -, _, ~)
-        # and doesn't contain sub-paths (no /)
-        match = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})$', path)
+        # Match 'name:id' or 'name:id/subfolder' where id is likely a GDrive ID
+        match = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', path)
         if match:
             remote_name = match.group(1)
             folder_id = match.group(2)
+            subpath = match.group(3) or ""
             
             # If the user already added curly braces, ignore
             if folder_id.startswith('{') and folder_id.endswith('}'):
                 return path
                 
             # transform to gclone connection string syntax
-            new_path = f"{remote_name}:{{{folder_id}}}"
+            new_path = f"{remote_name}:{{{folder_id}}}{subpath}"
             self.log_callback(logging.INFO, f"Transformed {path} -> {new_path}")
             return new_path
             
