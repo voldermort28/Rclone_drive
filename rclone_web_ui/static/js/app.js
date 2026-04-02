@@ -88,29 +88,13 @@ downloadBtn.addEventListener('click', async () => {
             return;
         }
 
-        // If "Wrap in Parent Folder" is checked, get folder name from rclone
+        // Send wrap flag to backend
         const wrapCheckbox = document.getElementById('wrapParentFolder');
-        if (wrapCheckbox && wrapCheckbox.checked) {
-            const srcLines = convertedUrls.split('\n').filter(l => l.trim());
-            // Process each source line — wrap each one
-            if (srcLines.length >= 1) {
-                downloadBtn.querySelector('.btn-text').textContent = 'Đang lấy tên folder...';
-                downloadBtn.disabled = true;
-                try {
-                    // For single source, get folder name and append to dest
-                    const srcPath = srcLines[0].trim();
-                    const nameResp = await fetch('/api/util/folder_name?path=' + encodeURIComponent(srcPath));
-                    const nameData = await nameResp.json();
-                    if (nameData.name) {
-                        outputDir = outputDir.replace(/\/+$/, '') + '/' + nameData.name;
-                    }
-                } catch (e) {
-                    console.warn('Could not get folder name:', e);
-                }
-            }
-        }
-
-        const payloadData = { url: convertedUrls, output_dir: outputDir };
+        const payloadData = {
+            url: convertedUrls,
+            output_dir: outputDir,
+            wrap: wrapCheckbox ? wrapCheckbox.checked : false
+        };
 
         const oldText = downloadBtn.querySelector('.btn-text').textContent;
         downloadBtn.querySelector('.btn-text').textContent = "Đang gửi...";

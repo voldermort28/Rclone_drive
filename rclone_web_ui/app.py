@@ -135,10 +135,20 @@ def run_real_rclone_job(job):
             if stop_event.is_set() or quota_error_hit:
                 break
             
+            # Wrap parent logic: resolve folder name for EACH source independently
+            final_dest = job['dest']
+            if job.get('wrap'):
+                try:
+                    folder_name = engine.get_folder_name(src)
+                    if folder_name:
+                        final_dest = final_dest.rstrip('/') + '/' + folder_name
+                except Exception as e:
+                    log_cb(logging.WARNING, f"Could not get folder name for {src}: {e}")
+
             download_state['files'][i]['status'] = 'downloading'
-            download_state['message'] = f"Copying from {src}..."
+            download_state['message'] = f"Copying from {src} to {final_dest}..."
             
-            success = engine.run_copy(src, job['dest'])
+            success = engine.run_copy(src, final_dest)
             
             if success and not quota_error_hit:
                 download_state['files'][i]['status'] = 'completed'
@@ -245,6 +255,7 @@ def start_download():
         
     urls = data.get('url', '')
     output_dir = data.get('output_dir', '')
+    wrap = data.get('wrap', False)
     
     if not urls or not output_dir:
         return jsonify({'error': 'Source and Destination are required'}), 400
@@ -254,6 +265,7 @@ def start_download():
         'id': str(uuid.uuid4()),
         'urls': urls,
         'dest': output_dir,
+        'wrap': wrap,
         'status': 'waiting',
         'execute_at': time.time() - 1, # Immediately eligible
         'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
