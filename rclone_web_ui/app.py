@@ -155,11 +155,12 @@ def run_real_rclone_job(job):
             final_dest = job['dest']
             if job.get('wrap'):
                 folder_name = ""
-                # 1. Try scraping from URL
-                if "http" in src:
-                    folder_name = scrape_folder_name_from_url(src)
+                # 1. Try scraping from original URL (src is gc:ID, not a URL)
+                original_url = job.get('original_url', '')
+                if original_url:
+                    folder_name = scrape_folder_name_from_url(original_url)
                 
-                # 2. Fallback to rclone lsjson (even if often fails on this VPS version)
+                # 2. Fallback to rclone lsjson
                 if not folder_name:
                     folder_name = engine.get_folder_name(src)
                 
