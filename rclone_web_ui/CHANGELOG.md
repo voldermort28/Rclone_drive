@@ -11,9 +11,19 @@
 - Refactored `app.py` UI polling to handle both Transfer and Verify states independently.
 - Improved Rclone process isolation to prevent hanging or zombie processes on VPS.
 
+### [2026-04-07]
+### Added
+- **Destination History Management**: Added `DELETE` method to `/api/dest_history` and folder name resolution in the dropdown.
+- **Drive Explorer Upgrades**: Redesigned the Explorer modal to be opaque, larger, and support "Smart Browse" starting from the current input path.
+
+### Changed
+- **Python 3.6 Compatibility**: Replaced `capture_output=True` (Python 3.7+) with `stdout/stderr=PIPE` to support older VPS environments.
+- **Folder Wrapping Logic**: Hardened multi-link parent folder wrapping using a 3-tier name resolution fallback.
+
 ### Fixed
-- Fixed 403 quota hanging by implementing forced wait states in the background worker.
-- Fixed UI freeze during large directory scans by using non-blocking subprocess streaming.
+- Fixed `#destDropdown` transparency issue.
+- Fixed modal screen flickering by replacing native `confirm()` with custom modal.
+- Fixed `gclone lsjson` silent failures on VPS due to Python version mismatch.
 
 ---
 *Created by Antigravity AI*

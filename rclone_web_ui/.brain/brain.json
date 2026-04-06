@@ -2,53 +2,67 @@
   "meta": {
     "schema_version": "1.1.0",
     "awf_version": "3.3.0",
-    "last_saved": "2026-03-26T00:20:00Z"
+    "last_saved": "2026-04-07T03:55:00Z"
   },
   "project": {
     "name": "GDriveDL - Rclone VPS Web Controller",
     "type": "Flask + Rclone Transfer Management",
-    "status": "Beta - Core Features Implemented"
+    "status": "Production Ready - UX Stabilized"
   },
   "tech_stack": {
     "frontend": "Vanilla JS + CSS (Liquid Theme)",
-    "backend": "Python 3.9 + Flask",
-    "transfer_engine": "Rclone binary (subprocess)"
+    "backend": "Python 3.6+ + Flask",
+    "transfer_engine": "Gclone binary (subprocess)"
   },
   "features": [
     {
-      "name": "Smart Queue",
-      "description": "Persistent asynchronous queue for file transfers using queue.json",
+      "name": "Smart Queue v2",
+      "description": "Persistent asynchronous queue with parent folder wrapping logic",
       "status": "Implemented"
     },
     {
-      "name": "Smart Auto-Retry",
-      "description": "Automatic 3-hour backoff when detecting Google Drive 403 downloadQuotaExceeded errors",
-      "status": "Implemented"
+      "name": "Drive Explorer",
+      "description": "Visual folder browser with breadcrumbs and new folder creation",
+      "status": "UX Enhanced"
     },
     {
-      "name": "Verify & Sync",
-      "description": "Rclone-based file comparison with real-time discrepancy reporting and one-click fix",
-      "status": "Implemented"
-    },
-    {
-      "name": "Real-time Console",
-      "description": "Live streaming of Rclone subprocess output to web-based terminal widget",
+      "name": "Smart Title Scraper",
+      "description": "3-tier fallback for resolving human-readable folder names from Drive URLs",
       "status": "Implemented"
     }
   ],
   "api_endpoints": [
-    { "path": "/api/download", "method": "POST", "desc": "Add URLs to transfer queue" },
-    { "path": "/api/status", "method": "GET", "desc": "Polling current transfer and queue stats" },
-    { "path": "/api/stop", "method": "POST", "desc": "Kill current active Rclone process" },
-    { "path": "/api/history", "method": "GET", "desc": "Retrieve past transfer records" },
-    { "path": "/api/verify", "method": "POST", "desc": "Trigger rclone check between source and dest" },
-    { "path": "/api/verify/status", "method": "GET", "desc": "Poll progress and results of verification" }
+    {
+      "path": "/api/download",
+      "method": "POST",
+      "desc": "Add URLs to transfer queue"
+    },
+    {
+      "path": "/api/dest_history",
+      "method": "GET/POST/DELETE",
+      "desc": "Manage destination folder history with resolved names"
+    },
+    {
+      "path": "/api/explore",
+      "method": "GET",
+      "desc": "Browse remote drive contents"
+    },
+    {
+      "path": "/api/mkdir",
+      "method": "POST",
+      "desc": "Create remote directory"
+    }
   ],
   "knowledge_items": {
-    "patterns": ["Asynchronous Thread Worker", "State persistence via JSON", "Subprocess stdout parsing"],
+    "patterns": [
+      "Subprocess stdout/stderr PIPE (Python 3.6 compat)",
+      "Custom Modals vs Browser Native",
+      "3-Tier Name Resolution Fallback"
+    ],
     "vps_info": {
       "ip": "116.118.48.68",
-      "root_dir": "/www/wwwroot/rclone.laboon.vn/"
+      "root_dir": "/www/wwwroot/rclone.laboon.vn/",
+      "python_version": "3.6.8"
     }
   }
 }

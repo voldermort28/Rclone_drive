@@ -49,5 +49,18 @@ Reads the content of `rclone.conf`.
 Updates the content of `rclone.conf`.
 **Body:** `{"content": "..."}`
 
-### POST `/api/sa/upload`
-Uploads service account JSON files to the `sa/` directory. (Multipart FormData)
+---
+
+## 📅 Destination History
+
+### GET `/api/dest_history`
+Returns the recent 20 destination paths with resolved names.
+**Response:** `[{"path": "gc:{ID}", "name": "Folder Name", "used_at": "..."}]`
+
+### POST `/api/dest_history`
+Saves a path to history and resolves its name via Rclone.
+**Body:** `{"path": "gc:{ID}"}`
+
+### DELETE `/api/dest_history`
+Removes a specific path from the history listing.
+**Body:** `{"path": "gc:{ID}"}`
