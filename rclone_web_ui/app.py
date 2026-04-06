@@ -598,7 +598,22 @@ def _make_engine():
 @app.route('/api/explore', methods=['GET'])
 def explore_drive():
     path = request.args.get('path', 'gc:')
-    items = _make_engine().list_dir(path, dirs_only=True)
+    engine = _make_engine()
+    items = engine.list_dir(path, dirs_only=True)
+    # If no items found, try without --dirs-only to see if there's anything at all
+    if not items:
+        all_items = engine.list_dir(path, dirs_only=False)
+        # Return debug info
+        if request.args.get('debug'):
+            return jsonify({
+                'dirs': items,
+                'all_items': len(all_items),
+                'sa_dir': engine._get_sa_dir(),
+                'config': engine._get_config_path(),
+                'binary': engine._detect_binary()
+            })
+        # Filter to directories only from full listing
+        items = [i for i in all_items if i.get('IsDir')]
     return jsonify(items)
 
 @app.route('/api/mkdir', methods=['POST'])
