@@ -679,7 +679,20 @@ def handle_dest_history():
     else:
         if os.path.exists(DEST_HISTORY_FILE):
             try:
-                with open(DEST_HISTORY_FILE, 'r') as f: return jsonify(json.load(f))
+                with open(DEST_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+                # Auto-resolve missing names for old entries
+                updated = False
+                for h in history:
+                    if not h.get('name'):
+                        resolved = _resolve_folder_name(h['path'])
+                        if resolved:
+                            h['name'] = resolved
+                            updated = True
+                if updated:
+                    with open(DEST_HISTORY_FILE, 'w') as f:
+                        json.dump(history, f)
+                return jsonify(history)
             except: pass
         return jsonify([])
 
