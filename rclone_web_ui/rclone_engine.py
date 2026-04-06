@@ -276,15 +276,19 @@ class RcloneEngine:
         cmd = self._base_cmd("lsjson", path)
         if dirs_only:
             cmd.append("--dirs-only")
+        self._last_cmd = ' '.join(cmd)
+        self._last_stderr = ''
         try:
             print(f"[EXPLORER] Running: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            self._last_stderr = result.stderr
             if result.returncode == 0:
                 return _json.loads(result.stdout)
             else:
                 print(f"[EXPLORER] stderr: {result.stderr}")
                 return []
         except Exception as e:
+            self._last_stderr = str(e)
             print(f"[EXPLORER] Error: {e}")
             return []
 

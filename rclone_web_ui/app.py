@@ -610,7 +610,9 @@ def explore_drive():
                 'all_items': len(all_items),
                 'sa_dir': engine._get_sa_dir(),
                 'config': engine._get_config_path(),
-                'binary': engine._detect_binary()
+                'binary': engine._detect_binary(),
+                'cmd': getattr(engine, '_last_cmd', ''),
+                'stderr': getattr(engine, '_last_stderr', '')
             })
         # Filter to directories only from full listing
         items = [i for i in all_items if i.get('IsDir')]
