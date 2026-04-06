@@ -351,26 +351,28 @@
 
         <!-- ========== DRIVE EXPLORER MODAL ========== -->
         <div id="driveExplorerModal"
-            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:1000; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); justify-content:center; align-items:center;">
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:1000; background:rgba(0,0,0,.7); backdrop-filter:blur(6px); justify-content:center; align-items:center;">
             <div
-                style="background: var(--bg-card); border:1px solid var(--border-color); border-radius:12px; width:90%; max-width:600px; max-height:80vh; display:flex; flex-direction:column; box-shadow: 0 20px 60px rgba(0,0,0,.5);">
+                style="background: var(--card-bg, #1e293b); border:1px solid var(--border, #334155); border-radius:12px; width:95%; max-width:800px; height:85vh; max-height:85vh; display:flex; flex-direction:column; box-shadow: 0 20px 60px rgba(0,0,0,.5);">
                 <div
-                    style="padding:16px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                    style="padding:16px 20px; border-bottom:1px solid var(--border, #334155); display:flex; justify-content:space-between; align-items:center;">
                     <h3 style="margin:0; font-size:1.1rem;">📂 Duyệt Drive</h3>
                     <button id="explorerCloseBtn" class="btn-secondary" style="padding:4px 10px; font-size:0.85rem;">✕
                         Đóng</button>
                 </div>
                 <div id="explorerBreadcrumb"
-                    style="padding:10px 20px; font-size:0.85rem; color:var(--text-muted); background: rgba(255,255,255,.03); border-bottom: 1px solid var(--border-color); overflow-x: auto; white-space: nowrap;">
+                    style="padding:10px 20px; font-size:0.85rem; color:var(--text-muted); background: rgba(255,255,255,.03); border-bottom: 1px solid var(--border, #334155); overflow-x: auto; white-space: nowrap;">
                     gc:
                 </div>
-                <div id="explorerList" style="flex:1; overflow-y:auto; min-height:200px; padding: 8px 0;">
+                <div id="explorerList" style="flex:1; overflow-y:auto; min-height:300px; padding: 8px 0;">
                     <div style="text-align:center; padding:30px; color:var(--text-muted);">Đang tải...</div>
                 </div>
-                <div style="padding:12px 20px; border-top:1px solid var(--border-color); display:flex; gap:8px;">
-                    <button id="explorerNewFolderBtn" class="btn-secondary" style="flex:1; padding:8px;">➕ Tạo thư mục
+                <div style="padding:16px 20px; border-top:1px solid var(--border, #334155); display:flex; gap:12px;">
+                    <button id="explorerNewFolderBtn" class="btn-secondary"
+                        style="flex:1; padding:10px; font-size:0.95rem;">➕ Tạo thư mục
                         mới</button>
-                    <button id="explorerSelectBtn" class="btn-primary" style="flex:1; padding:8px;">✅ Chọn thư mục
+                    <button id="explorerSelectBtn" class="btn-primary"
+                        style="flex:1; padding:10px; font-size:0.95rem;">✅ Chọn thư mục
                         này</button>
                 </div>
             </div>

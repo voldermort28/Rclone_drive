@@ -295,8 +295,22 @@ const explorerList = document.getElementById('explorerList');
 const explorerBreadcrumb = document.getElementById('explorerBreadcrumb');
 
 document.getElementById('browseDestBtn').addEventListener('click', () => {
-    explorerPath = 'gc:';
-    explorerHistory = ['gc:'];
+    let currentPath = outputDirInput.value.trim();
+    if (!currentPath || !currentPath.startsWith('gc:')) {
+        currentPath = 'gc:';
+    }
+
+    explorerPath = currentPath;
+
+    // Build history for back button
+    const parts = currentPath.split('/');
+    explorerHistory = [];
+    let acc = '';
+    for (let i = 0; i < parts.length; i++) {
+        acc += (i > 0 ? '/' : '') + parts[i];
+        explorerHistory.push(acc);
+    }
+
     explorerModal.style.display = 'flex';
     loadExplorerDir(explorerPath);
 });
@@ -355,7 +369,11 @@ function loadExplorerDir(path) {
         .then(r => r.json())
         .then(items => {
             if (!items || items.length === 0) {
-                explorerList.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted);">📂 Thư mục trống</div>';
+                if (path === 'gc:') {
+                    explorerList.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted); line-height: 1.6;">📂 Thư mục gốc trống.<br><br><span style="font-size:0.9rem; color:#64748b;">Mẹo: Hãy dán ID thư mục Google Drive (VD: 1xlaPOv...) vào ô bên ngoài,<br>sau đó bấm "Duyệt Drive" để xem nội dung bên trong!</span></div>';
+                } else {
+                    explorerList.innerHTML = '<div style="text-align:center; padding:30px; color:var(--text-muted);">📂 Thư mục trống</div>';
+                }
                 return;
             }
             explorerList.innerHTML = '';
