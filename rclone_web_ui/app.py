@@ -616,9 +616,30 @@ def get_folder_name_api():
     name = _make_engine().get_folder_name(path)
     return jsonify({'name': name})
 
-@app.route('/api/dest_history', methods=['GET', 'POST'])
+def _resolve_folder_name(gc_path):
+    """Resolve a gc:ID path to its actual Google Drive folder name."""
+    try:
+        import subprocess
+        rclone_bin = '/usr/bin/gclone'
+        # Prepare the path with curly braces for gclone
+        prepared = gc_path
+        m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', gc_path)
+        if m:
+            prepared = f"{m.group(1)}:{{{m.group(2)}}}{m.group(3) or ''}"
+        result = subprocess.run(
+            [rclone_bin, 'lsf', '--dirs-only', '-d', prepared],
+            capture_output=True, text=True, timeout=10
+        )
+        name = result.stdout.strip().rstrip('/')
+        if name:
+            return name
+    except Exception as e:
+        logging.warning(f"[DEST_HISTORY] Folder name resolve failed: {e}")
+    return ""
+
+@app.route('/api/dest_history', methods=['GET', 'POST', 'DELETE'])
 def handle_dest_history():
-    if request.method == 'POST':
+    if request.method == 'DELETE':
         data = request.get_json(force=True, silent=True)
         path = data.get('path') if data else None
         if not path: return jsonify({'error': 'Missing path'}), 400
@@ -629,7 +650,29 @@ def handle_dest_history():
                     history = json.load(f)
             except: pass
         history = [h for h in history if h.get('path') != path]
-        history.insert(0, {'path': path, 'used_at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+        with open(DEST_HISTORY_FILE, 'w') as f: json.dump(history, f)
+        return jsonify({'message': 'Deleted'})
+
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True)
+        path = data.get('path') if data else None
+        if not path: return jsonify({'error': 'Missing path'}), 400
+        history = []
+        if os.path.exists(DEST_HISTORY_FILE):
+            try:
+                with open(DEST_HISTORY_FILE, 'r') as f:
+                    history = json.load(f)
+            except: pass
+        # Resolve folder name
+        name = data.get('name', '')
+        if not name or name == path:
+            name = _resolve_folder_name(path)
+        history = [h for h in history if h.get('path') != path]
+        history.insert(0, {
+            'path': path,
+            'name': name or '',
+            'used_at': datetime.now().strftime("%Y-%m-%d %H:%M")
+        })
         history = history[:20]
         with open(DEST_HISTORY_FILE, 'w') as f: json.dump(history, f)
         return jsonify({'message': 'Saved'})

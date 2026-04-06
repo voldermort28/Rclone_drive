@@ -212,34 +212,60 @@ function showDestDropdown() {
         .then(r => r.json())
         .then(items => {
             if (!items || items.length === 0) {
-                dropdown.innerHTML = '<div style="padding:14px; text-align:center; color:var(--text-muted); font-size:0.8rem;">📭 Chưa có lịch sử folder đích</div>';
-                dropdown.style.display = 'block';
+                dropdown.innerHTML = '<div style="padding:14px; text-align:center; color:#94a3b8; font-size:0.8rem;">📭 Chưa có lịch sử folder đích</div>';
+                dropdown.style.cssText = 'display:block; position:absolute; z-index:9999; top:100%; left:0; right:0; max-height:220px; overflow-y:auto; background:#1e293b; border:1px solid #334155; border-radius:0 0 8px 8px; box-shadow:0 8px 20px rgba(0,0,0,0.5);';
                 return;
             }
             dropdown.innerHTML = '';
             items.forEach(item => {
                 const row = document.createElement('div');
-                row.style.cssText = 'padding:10px 14px; cursor:pointer; font-size:0.85rem; border-bottom: 1px solid #334155; transition: background 0.15s; background: #1e293b; z-index: 10000;';
+                row.style.cssText = 'padding:10px 14px; cursor:pointer; font-size:0.85rem; border-bottom:1px solid #334155; transition:background 0.15s; background:#1e293b; display:flex; align-items:center; gap:10px;';
 
-                let folderName = 'Thư mục đích';
+                // Determine display name
+                let displayName = item.name || '';
+                if (!displayName) {
+                    const parts = item.path.split('/');
+                    if (parts.length > 1) {
+                        displayName = parts[parts.length - 1];
+                    }
+                }
+                if (!displayName) displayName = 'Chưa rõ tên';
+
+                // Shorten path for display
                 let shortPath = item.path;
-
-                const parts = item.path.split('/');
-                if (parts.length > 1) {
-                    folderName = parts[parts.length - 1];
-                } else if (item.path.indexOf(':') > -1) {
-                    folderName = "Gốc (" + item.path.split(':')[0] + ")";
+                if (shortPath.length > 40) {
+                    shortPath = shortPath.substring(0, 18) + '...' + shortPath.substring(shortPath.length - 15);
                 }
 
-                if (shortPath.length > 35) {
-                    shortPath = shortPath.substring(0, 15) + '...' + shortPath.substring(shortPath.length - 15);
-                }
+                // Info section (clickable)
+                const info = document.createElement('div');
+                info.style.cssText = 'flex:1; min-width:0;';
+                info.innerHTML = '<div style="color:#60a5fa; font-weight:600; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📁 ' + displayName + '</div>' +
+                    '<div style="color:#64748b; font-size:0.72rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + shortPath + '</div>';
 
-                row.innerHTML = '<div style="color:#60a5fa; font-weight:600; margin-bottom:4px;">' + folderName + '</div>' +
-                    '<div style="color:#94a3b8; font-size:0.75rem;">' + shortPath + '</div>';
+                // Delete button
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.textContent = '✕';
+                delBtn.title = 'Xóa khỏi danh sách';
+                delBtn.style.cssText = 'background:none; border:none; color:#ef4444; font-size:16px; cursor:pointer; padding:4px 6px; border-radius:4px; transition:background 0.15s; flex-shrink:0; line-height:1;';
+                delBtn.addEventListener('mouseenter', () => delBtn.style.background = 'rgba(239,68,68,0.15)');
+                delBtn.addEventListener('mouseleave', () => delBtn.style.background = 'none');
+                delBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    fetch('/api/dest_history', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: item.path })
+                    }).then(() => showDestDropdown());
+                });
+
+                row.appendChild(info);
+                row.appendChild(delBtn);
+
                 row.addEventListener('mouseenter', () => row.style.background = '#334155');
                 row.addEventListener('mouseleave', () => row.style.background = '#1e293b');
-                row.addEventListener('click', (e) => {
+                info.addEventListener('click', (e) => {
                     e.stopPropagation();
                     outputDirInput.value = item.path;
                     localStorage.setItem('rclone_dest', item.path);
@@ -247,7 +273,7 @@ function showDestDropdown() {
                 });
                 dropdown.appendChild(row);
             });
-            dropdown.style.cssText = 'display:block; position:absolute; z-index:9999; top:100%; left:0; right:0; max-height:220px; overflow-y:auto; background:#1e293b; border:1px solid #334155; border-radius:0 0 8px 8px; box-shadow:0 8px 20px rgba(0,0,0,0.5);';
+            dropdown.style.cssText = 'display:block; position:absolute; z-index:9999; top:100%; left:0; right:0; max-height:260px; overflow-y:auto; background:#1e293b; border:1px solid #334155; border-radius:0 0 8px 8px; box-shadow:0 8px 20px rgba(0,0,0,0.5);';
         })
         .catch(() => { });
 }
