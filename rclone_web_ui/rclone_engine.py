@@ -280,7 +280,7 @@ class RcloneEngine:
         self._last_stderr = ''
         try:
             print(f"[EXPLORER] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
             self._last_stderr = result.stderr
             if result.returncode == 0:
                 return _json.loads(result.stdout)
@@ -298,7 +298,7 @@ class RcloneEngine:
         cmd = self._base_cmd("mkdir", path)
         try:
             print(f"[MKDIR] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
             return result.returncode == 0
         except Exception as e:
             print(f"[MKDIR] Error: {e}")
@@ -311,7 +311,7 @@ class RcloneEngine:
         cmd = self._base_cmd("lsjson", path, "--stat")
         try:
             print(f"[FOLDER_NAME] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=15)
             if result.returncode == 0:
                 data = _json.loads(result.stdout)
                 # lsjson --stat returns a single object or array with one item
