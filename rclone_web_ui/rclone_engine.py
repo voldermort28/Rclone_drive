@@ -94,28 +94,22 @@ class RcloneEngine:
             else:
                 self.log_callback(logging.INFO, f"Using rclone config: {config_path}")
 
-            # Force UTF-8 encoding for subprocess on CentOS 7 with ASCII locale
-            env = os.environ.copy()
-            env['LC_ALL'] = 'en_US.UTF-8'
-            env['PYTHONIOENCODING'] = 'utf-8'
+            # Use raw bytes mode to bypass Python's filesystem encoding (ASCII on CentOS 7)
+            cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
 
             self.process = subprocess.Popen(
-                cmd,
+                cmd_bytes,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
-                universal_newlines=True,
-                encoding='utf-8',
-                errors='replace',
-                env=env
             )
 
             progress_regex = re.compile(r'(\d+)%')
             
             # Use self.process explicitly to satisfy lint and logic
             if self.process and self.process.stdout:
-                for line in self.process.stdout:
-                    line = line.strip()
+                for raw_line in self.process.stdout:
+                    line = raw_line.decode('utf-8', errors='replace').strip()
                     if not line:
                         continue
                         
@@ -193,25 +187,19 @@ class RcloneEngine:
         }
         
         try:
-            # Force UTF-8 encoding for subprocess on CentOS 7 with ASCII locale
-            env = os.environ.copy()
-            env['LC_ALL'] = 'en_US.UTF-8'
-            env['PYTHONIOENCODING'] = 'utf-8'
+            # Use raw bytes mode to bypass Python's filesystem encoding (ASCII on CentOS 7)
+            cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
 
             self.process = subprocess.Popen(
-                cmd,
+                cmd_bytes,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
-                universal_newlines=True,
-                encoding='utf-8',
-                errors='replace',
-                env=env
             )
 
             if self.process and self.process.stdout:
-                for line in self.process.stdout:
-                    line = line.strip()
+                for raw_line in self.process.stdout:
+                    line = raw_line.decode('utf-8', errors='replace').strip()
                     if not line:
                         continue
                         
