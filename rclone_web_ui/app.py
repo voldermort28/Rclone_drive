@@ -112,9 +112,9 @@ def get_folder_name_via_rclone(gc_path):
         # lsf -d shows the folder name itself
         result = subprocess.run(
             [rclone_bin, 'lsf', '--dirs-only', '-d', gc_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=15
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15
         )
-        name = result.stdout.strip().rstrip('/')
+        name = result.stdout.decode('utf-8', errors='replace').strip().rstrip('/')
         if name:
             logging.info(f"[WRAP] rclone lsf got name: '{name}'")
             return re.sub(r'[\\/*?:"<>|]', '_', name)
@@ -645,9 +645,9 @@ def _resolve_folder_name(gc_path):
             prepared = f"{m.group(1)}:{{{m.group(2)}}}{m.group(3) or ''}"
         result = subprocess.run(
             [rclone_bin, 'lsf', '--dirs-only', '-d', prepared],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
         )
-        name = result.stdout.strip().rstrip('/')
+        name = result.stdout.decode('utf-8', errors='replace').strip().rstrip('/')
         if name:
             return name
     except Exception as e:

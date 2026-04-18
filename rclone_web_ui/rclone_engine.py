@@ -280,12 +280,14 @@ class RcloneEngine:
         self._last_stderr = ''
         try:
             print(f"[EXPLORER] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
-            self._last_stderr = result.stderr
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            stdout_text = result.stdout.decode('utf-8', errors='replace')
+            stderr_text = result.stderr.decode('utf-8', errors='replace')
+            self._last_stderr = stderr_text
             if result.returncode == 0:
-                return _json.loads(result.stdout)
+                return _json.loads(stdout_text)
             else:
-                print(f"[EXPLORER] stderr: {result.stderr}")
+                print(f"[EXPLORER] stderr: {stderr_text}")
                 return []
         except Exception as e:
             self._last_stderr = str(e)
@@ -298,7 +300,7 @@ class RcloneEngine:
         cmd = self._base_cmd("mkdir", path)
         try:
             print(f"[MKDIR] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             return result.returncode == 0
         except Exception as e:
             print(f"[MKDIR] Error: {e}")
@@ -311,9 +313,9 @@ class RcloneEngine:
         cmd = self._base_cmd("lsjson", path, "--stat")
         try:
             print(f"[FOLDER_NAME] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=15)
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             if result.returncode == 0:
-                data = _json.loads(result.stdout)
+                data = _json.loads(result.stdout.decode('utf-8', errors='replace'))
                 # lsjson --stat returns a single object or array with one item
                 if isinstance(data, list) and len(data) > 0:
                     return data[0].get('Name', '')
