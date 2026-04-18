@@ -94,6 +94,11 @@ class RcloneEngine:
             else:
                 self.log_callback(logging.INFO, f"Using rclone config: {config_path}")
 
+            # Force UTF-8 encoding for subprocess on CentOS 7 with ASCII locale
+            env = os.environ.copy()
+            env['LC_ALL'] = 'en_US.UTF-8'
+            env['PYTHONIOENCODING'] = 'utf-8'
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -101,7 +106,8 @@ class RcloneEngine:
                 bufsize=1,
                 universal_newlines=True,
                 encoding='utf-8',
-                errors='replace'
+                errors='replace',
+                env=env
             )
 
             progress_regex = re.compile(r'(\d+)%')
@@ -187,6 +193,11 @@ class RcloneEngine:
         }
         
         try:
+            # Force UTF-8 encoding for subprocess on CentOS 7 with ASCII locale
+            env = os.environ.copy()
+            env['LC_ALL'] = 'en_US.UTF-8'
+            env['PYTHONIOENCODING'] = 'utf-8'
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -194,7 +205,8 @@ class RcloneEngine:
                 bufsize=1,
                 universal_newlines=True,
                 encoding='utf-8',
-                errors='replace'
+                errors='replace',
+                env=env
             )
 
             if self.process and self.process.stdout:
