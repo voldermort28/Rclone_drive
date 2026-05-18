@@ -68,117 +68,136 @@ class TeraboxEngine:
     # ==================== TERABOX API ====================
 
     def _parse_share_url(self, url):
-        """Extract short URL key from Terabox share link.
-        
-        Supports formats:
-        - https://www.terabox.app/s/1xxxxxx
-        - https://teraboxapp.com/s/1xxxxxx
-        - https://www.terabox.com/s/1xxxxxx
-        - https://1024terabox.com/s/1xxxxxx
-        """
+        """Clean up the terabox url."""
         url = url.strip()
-        # Match /s/ pattern
-        m = re.search(r'/s/([A-Za-z0-9_-]+)', url)
-        if m:
-            return m.group(1)
-        # Maybe user pasted just the key
+        # If they just passed the key
         if re.match(r'^[A-Za-z0-9_-]{6,}$', url):
-            return url
-        return None
+            return "https://www.terabox.app/s/" + url
+        return url
 
     def _build_cookie_header(self, cookie_value):
         """Build cookie header string from ndus value."""
         cookie_value = cookie_value.strip()
-        # If user pasted full cookie string with ndus=
         if 'ndus=' in cookie_value:
             return cookie_value
-        # Just the value
         return "ndus={0}; lang=en".format(cookie_value)
 
+    def _find_between(self, s, start, end):
+        start_index = s.find(start)
+        if start_index == -1: return ""
+        start_index += len(start)
+        end_index = s.find(end, start_index)
+        if end_index == -1: return ""
+        return s[start_index:end_index]
+
     def get_file_info(self, url, cookie):
-        """Get file information from a Terabox share link.
-        
-        Returns dict: { "file_name": str, "file_size": int, "file_size_human": str, 
-                        "download_url": str, "fs_id": str }
-        Or dict with "error" key on failure.
-        """
+        """Get file information from a Terabox share link."""
         if requests is None:
             return {"error": "Module 'requests' not installed. Run: pip install requests"}
 
-        surl = self._parse_share_url(url)
-        if not surl:
-            return {"error": "Link Terabox không hợp lệ. Cần link dạng: https://www.terabox.app/s/..."}
+        full_url = self._parse_share_url(url)
+        if not full_url:
+            return {"error": "Link Terabox không hợp lệ."}
 
         cookie_header = self._build_cookie_header(cookie)
         headers = {
-            "Cookie": cookie_header,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+            "Connection": "keep-alive",
+            "DNT": "1",
+            "Host": "www.terabox.app",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+            "Cookie": cookie_header,
         }
 
         try:
-            # Step 1: Get share info (file list)
-            api_url = "{0}/api/shorturlinfo?shorturl={1}&root=1".format(
-                self.TERABOX_API_BASE, surl
-            )
-            self.log_callback(logging.INFO, "Fetching file info from Terabox...")
-            resp = requests.get(api_url, headers=headers, timeout=30)
-            data = resp.json()
-
-            if data.get('errno', -1) != 0:
-                err_msg = data.get('errmsg', 'Unknown error')
-                if data.get('errno') == -6:
-                    return {"error": "Cookie hết hạn hoặc không hợp lệ. Vui lòng cập nhật cookie ndus."}
-                if data.get('errno') == -9:
+            self.log_callback(logging.INFO, "Đang lấy thông tin xác thực từ trang...")
+            
+            # Use session to handle redirects automatically
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # 1. Fetch initial link to get redirected to the actual page and get tokens
+            r = session.get(full_url, timeout=30)
+            if not r.ok:
+                return {"error": "Lỗi truy cập link Terabox. Mã lỗi: {0}".format(r.status_code)}
+            
+            html = r.text
+            js_token = self._find_between(html, 'fn%28%22', '%22%29')
+            logid = self._find_between(html, 'dp-logid=', '&')
+            
+            # Extract surl from the final URL query
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(r.url)
+            query = parse_qs(parsed.query)
+            
+            surl = ""
+            if "surl" in query:
+                surl = query["surl"][0]
+            else:
+                # Try to extract from path (e.g. /s/1xxxxxx -> 1xxxxxx)
+                m = re.search(r'/s/1([A-Za-z0-9_-]+)', r.url)
+                if m:
+                    surl = "1" + m.group(1)
+            
+            if not surl:
+                return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
+                
+            if not js_token or not logid:
+                # If we couldn't find tokens, the cookie might be invalid or page structure changed
+                if "error/404" in r.url or "not found" in html.lower():
                     return {"error": "Link Terabox không tồn tại hoặc đã bị xóa."}
-                return {"error": "Terabox API error ({0}): {1}".format(data.get('errno'), err_msg)}
+                return {"error": "Không lấy được token xác thực. Cookie 'ndus' có thể đã hết hạn hoặc Terabox yêu cầu captcha."}
 
-            file_list = data.get('list', [])
-            if not file_list:
+            self.log_callback(logging.INFO, "Đã lấy được token. Đang lấy danh sách file...")
+
+            # 2. Get file list using the extracted tokens
+            params = {
+                "app_id": "250528",
+                "web": "1",
+                "channel": "dubox",
+                "clienttype": "0",
+                "jsToken": js_token,
+                "dp-logid": logid,
+                "page": "1",
+                "num": "20",
+                "by": "name",
+                "order": "asc",
+                "site_referer": r.url,
+                "shorturl": surl,
+                "root": "1",
+            }
+            
+            r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
+            data2 = r2.json()
+            
+            if data2.get("errno", -1) != 0:
+                err_msg = data2.get('errmsg', 'Unknown error')
+                if data2.get("errno") == -6:
+                    return {"error": "Cookie hết hạn hoặc không hợp lệ. Vui lòng cập nhật cookie ndus."}
+                return {"error": "Terabox API error ({0}): {1}".format(data2.get('errno'), err_msg)}
+                
+            if not data2.get("list"):
                 return {"error": "Không tìm thấy file nào trong link này."}
-
-            # Get first file (we only support 1 file at a time)
-            file_info = file_list[0]
-            file_name = file_info.get('server_filename', 'unknown')
-            file_size = int(file_info.get('size', 0))
-            fs_id = str(file_info.get('fs_id', ''))
-            is_dir = int(file_info.get('isdir', 0))
-
+                
+            file_info = data2["list"][0]
+            file_name = file_info.get("server_filename", "unknown")
+            file_size = int(file_info.get("size", 0))
+            is_dir = int(file_info.get("isdir", 0))
+            dlink = file_info.get("dlink", "")
+            
             if is_dir:
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
-
-            # Step 2: Get download link (dlink)
-            shareid = str(data.get('shareid', ''))
-            uk = str(data.get('uk', ''))
-            sign = data.get('sign', '')
-            timestamp_val = str(data.get('timestamp', ''))
-
-            dlink_url = ("{0}/api/filemetas?shareid={1}&uk={2}&sign={3}"
-                         "&timestamp={4}&fid_list=[{5}]").format(
-                self.TERABOX_API_BASE, shareid, uk, sign, timestamp_val, fs_id
-            )
-            resp2 = requests.get(dlink_url, headers=headers, timeout=30)
-            data2 = resp2.json()
-
-            download_url = ""
-            if data2.get('errno', -1) == 0:
-                info_list = data2.get('info', [])
-                if info_list:
-                    download_url = info_list[0].get('dlink', '')
-
-            if not download_url:
-                # Fallback: try from first API response
-                download_url = file_info.get('dlink', '')
-
+                
+            if not dlink:
+                return {"error": "Terabox không trả về link tải trực tiếp (dlink)."}
+                
             return {
                 "file_name": file_name,
                 "file_size": file_size,
                 "file_size_human": self._human_size(file_size),
-                "download_url": download_url,
-                "fs_id": fs_id,
-                "shareid": shareid,
-                "uk": uk,
+                "download_url": dlink,
             }
 
         except requests.exceptions.Timeout:
