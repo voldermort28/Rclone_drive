@@ -141,6 +141,16 @@ class TeraboxEngine:
             m_pcf = re.search(r'pcftoken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
             if m_pcf:
                 pcftoken = m_pcf.group(1)
+                
+            # Extract Baidu/Dubox specific vars for download API
+            sign = self._find_between(html, '"sign":"', '"')
+            timestamp_val = self._find_between(html, '"timestamp":', ',')
+            shareid = self._find_between(html, '"shareid":', ',')
+            if shareid and shareid.startswith('"'):
+                shareid = shareid.replace('"', '')
+            uk = self._find_between(html, '"uk":', ',')
+            if uk and uk.startswith('"'):
+                uk = uk.replace('"', '')
             
             # Extract surl from the final URL query
             from urllib.parse import urlparse, parse_qs
@@ -190,28 +200,59 @@ class TeraboxEngine:
             r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
             data2 = r2.json()
             
-            if data2.get("errno", -1) != 0:
-                err_msg = data2.get('errmsg', 'Unknown error')
-                if data2.get("errno") == -6:
-                    return {"error": "Cookie hết hạn hoặc không hợp lệ. Vui lòng cập nhật cookie ndus."}
-                return {"error": "Terabox API error ({0}): {1}".format(data2.get('errno'), err_msg)}
-                
-            if not data2.get("list"):
-                return {"error": "Không tìm thấy file nào trong link này."}
-                
-            file_info = data2["list"][0]
-            file_name = file_info.get("server_filename", "unknown")
-            file_size = int(file_info.get("size", 0))
-            is_dir = int(file_info.get("isdir", 0))
-            dlink = file_info.get("dlink", "")
+            if data2.get("errno") != 0:
+                err_msg = data2.get("errmsg", "Không rõ")
+                return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(err_msg, data2.get("errno"))}
             
-            if is_dir:
+            lst = data2.get("list", [])
+            if not lst:
+                return {"error": "Link này rỗng hoặc không có file nào."}
+            
+            file_info = lst[0]
+            file_name = file_info.get("server_filename")
+            file_size = int(file_info.get("size", 0))
+            is_dir = file_info.get("isdir")
+            dlink = file_info.get("dlink")
+            fs_id = file_info.get("fs_id")
+            
+            if str(is_dir) == "1":
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
                 
+            if not dlink and fs_id and sign and timestamp_val and shareid and uk:
+                self.log_callback(logging.INFO, "Không có dlink từ share/list, đang gọi share/download...")
+                dl_params = {
+                    "app_id": "250528",
+                    "web": "1",
+                    "channel": "dubox",
+                    "clienttype": "0",
+                    "jsToken": js_token,
+                    "sign": sign,
+                    "timestamp": timestamp_val,
+                    "shareid": shareid,
+                    "uk": uk,
+                    "primaryid": shareid,
+                    "fid_list": f"[{fs_id}]"
+                }
+                if logid: dl_params["dp-logid"] = logid
+                if pcftoken: dl_params["pcftoken"] = pcftoken
+                    
+                r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
+                data3 = r3.json()
+                if data3.get("errno") == 0:
+                    if "dlink" in data3:
+                        dlink = data3["dlink"]
+                    elif "list" in data3 and len(data3["list"]) > 0:
+                        dlink = data3["list"][0].get("dlink")
+                
+                if not dlink:
+                    import json
+                    debug_info = json.dumps(data3, ensure_ascii=False)
+                    return {"error": f"share/download thất bại. Data: {debug_info}"}
+
             if not dlink:
                 import json
                 debug_info = json.dumps(file_info, ensure_ascii=False)
-                return {"error": f"Terabox không trả về dlink. Data: {debug_info}"}
+                return {"error": f"Không tìm thấy biến xác thực (sign/timestamp) hoặc Terabox không trả về dlink. Data: {debug_info}"}
                 
             return {
                 "file_name": file_name,
