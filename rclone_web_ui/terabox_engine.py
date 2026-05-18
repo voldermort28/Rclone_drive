@@ -17,8 +17,10 @@ import json
 
 try:
     import requests
-# We will use subprocess to call yt-dlp CLI instead of importing it
+except ImportError:
+    requests = None
 
+# We will use subprocess to call yt-dlp CLI instead of importing it
 
 class TeraboxEngine:
     """Engine to handle Terabox download -> Google Drive upload pipeline."""
