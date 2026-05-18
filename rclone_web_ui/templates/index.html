@@ -52,6 +52,14 @@
                 </svg>
                 Cấu hình
             </button>
+            <button class="tab-btn" data-tab="terabox">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Terabox
+            </button>
             <button class="tab-btn" data-tab="history">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
@@ -376,6 +384,101 @@
                         này</button>
                 </div>
             </div>
+        </div>
+
+        <!-- ========== TAB: TERABOX ========== -->
+        <div class="tab-content" id="tab-terabox">
+            <!-- Card 1: Cookie Config -->
+            <section class="card input-section" id="teraboxCookieSection">
+                <div class="config-header" style="margin-bottom: 15px;">
+                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg> Terabox → Google Drive</h3>
+                    <p class="config-desc">Tải file từ Terabox về VPS rồi tự động đẩy lên Google Drive.</p>
+                </div>
+                <div style="padding: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; margin-bottom: 15px; font-size: 0.85rem; color: #fbbf24;">
+                    🍪 <strong>Cookie Terabox:</strong> Cần cookie <code>ndus</code> để tải file.
+                    Mở <a href="https://www.terabox.app" target="_blank" style="color: #38bdf8;">terabox.app</a> → Đăng nhập → F12 → Application → Cookies → copy giá trị <code>ndus</code>
+                </div>
+                <div class="input-group">
+                    <label for="teraboxCookie">Cookie ndus</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="password" id="teraboxCookie" placeholder="Paste giá trị ndus cookie ở đây..." style="flex: 1;">
+                        <button id="teraboxSaveCookieBtn" class="btn-primary" style="padding: 8px 20px; white-space: nowrap;">💾 Lưu</button>
+                    </div>
+                    <div id="teraboxCookieStatus" style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);"></div>
+                </div>
+            </section>
+
+            <!-- Card 2: Download Form -->
+            <section class="card input-section">
+                <div class="input-group">
+                    <label for="teraboxUrl">Link Terabox</label>
+                    <input type="text" id="teraboxUrl" placeholder="https://www.terabox.app/s/... hoặc https://teraboxapp.com/s/..." autocomplete="off">
+                </div>
+
+                <!-- File info (hidden until check) -->
+                <div id="teraboxFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 500;" id="teraboxFileName">—</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="teraboxFileSize">—</div>
+                        </div>
+                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="teraboxDest">Destination Google Drive (Nơi nhận)</label>
+                    <input type="text" id="teraboxDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button id="teraboxCheckBtn" class="btn-secondary" style="flex: 1;">
+                        🔍 Kiểm tra link
+                    </button>
+                    <button id="teraboxStartBtn" class="btn-primary" style="flex: 2;">
+                        🚀 Bắt đầu tải
+                    </button>
+                </div>
+            </section>
+
+            <!-- Card 3: Progress (hidden by default) -->
+            <section class="card status-section" id="teraboxStatusSection" style="display: none;">
+                <div class="status-header">
+                    <h3 id="teraboxStatusText">Đang xử lý...</h3>
+                    <span id="teraboxPhaseText" class="file-name" style="font-size: 0.85rem;"></span>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="teraboxProgressBar"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="teraboxProgressPercent">0%</span>
+                        <span id="teraboxProgressDetail"></span>
+                    </div>
+                </div>
+
+                <div class="console-container"
+                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
+                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
+                        >_ Terabox Console
+                    </div>
+                    <div id="teraboxConsole"
+                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
+                        Đang chờ...
+                    </div>
+                </div>
+
+                <button id="teraboxStopBtn" class="btn-secondary"
+                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
+                    ⏹ Dừng tiến trình
+                </button>
+            </section>
         </div>
 
     </main>

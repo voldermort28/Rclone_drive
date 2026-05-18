@@ -722,5 +722,198 @@ def handle_500(e):
     import traceback
     return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
+
+# ==================== TERABOX MODULE (Completely Isolated) ====================
+from terabox_engine import TeraboxEngine
+
+TERABOX_COOKIE_FILE = os.path.join(BASE_DIR, 'terabox_cookie.txt')
+
+terabox_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False
+}
+_terabox_engine = None
+
+
+def _terabox_progress(percent, message):
+    terabox_state['progress'] = percent
+    terabox_state['message'] = message
+
+
+def _terabox_log(level, message):
+    terabox_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(terabox_state['logs']) > 200:
+        terabox_state['logs'] = terabox_state['logs'][-200:]
+    logging.log(level, "[TERABOX] %s", message)
+
+
+def _terabox_stop_checker():
+    return terabox_state.get('stop_flag', False)
+
+
+@app.route('/api/terabox/cookie', methods=['GET', 'POST'])
+def terabox_cookie():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        cookie_val = data.get('cookie', '').strip()
+        if not cookie_val:
+            return jsonify({'success': False, 'error': 'Cookie không được để trống'})
+        try:
+            with open(TERABOX_COOKIE_FILE, 'w') as f:
+                f.write(cookie_val)
+            return jsonify({'success': True, 'message': 'Cookie đã lưu thành công'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+    else:
+        if os.path.exists(TERABOX_COOKIE_FILE):
+            try:
+                with open(TERABOX_COOKIE_FILE, 'r') as f:
+                    val = f.read().strip()
+                if val:
+                    # Mask cookie for display
+                    if len(val) > 16:
+                        masked = val[:8] + '...' + val[-8:]
+                    else:
+                        masked = '***'
+                    return jsonify({'has_cookie': True, 'masked': masked})
+            except Exception:
+                pass
+        return jsonify({'has_cookie': False})
+
+
+@app.route('/api/terabox/info', methods=['POST'])
+def terabox_info():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Terabox'})
+
+    # Read cookie
+    if not os.path.exists(TERABOX_COOKIE_FILE):
+        return jsonify({'success': False, 'error': 'Chưa cấu hình cookie. Vui lòng lưu cookie trước.'})
+    with open(TERABOX_COOKIE_FILE, 'r') as f:
+        cookie = f.read().strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie trống. Vui lòng cập nhật cookie.'})
+
+    engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker)
+    info = engine.get_file_info(url, cookie)
+
+    if 'error' in info:
+        return jsonify({'success': False, 'error': info['error']})
+
+    return jsonify({
+        'success': True,
+        'file_name': info['file_name'],
+        'file_size': info['file_size'],
+        'file_size_human': info['file_size_human'],
+    })
+
+
+@app.route('/api/terabox/start', methods=['POST'])
+def terabox_start():
+    global _terabox_engine
+
+    if terabox_state['status'] in ('downloading', 'uploading', 'fetching_info'):
+        return jsonify({'success': False, 'error': 'Đang có tiến trình chạy. Vui lòng đợi hoặc dừng trước.'})
+
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    dest = data.get('destination', '').strip()
+
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Terabox'})
+    if not dest:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
+
+    # Read cookie
+    if not os.path.exists(TERABOX_COOKIE_FILE):
+        return jsonify({'success': False, 'error': 'Chưa cấu hình cookie.'})
+    with open(TERABOX_COOKIE_FILE, 'r') as f:
+        cookie = f.read().strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie trống.'})
+
+    # Convert Google Drive URL to gc: format
+    dest_converted = dest
+    if 'drive.google.com' in dest:
+        m = re.search(r'/folders/([A-Za-z0-9_-]{15,})', dest.split('?')[0])
+        if m:
+            dest_converted = 'gc:' + m.group(1)
+
+    # Reset state
+    terabox_state.update({
+        'status': 'downloading',
+        'progress': 0,
+        'message': 'Khởi tạo...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False
+    })
+
+    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker)
+
+    def _run_pipeline():
+        try:
+            success = _terabox_engine.run_full_pipeline(url, cookie, dest_converted)
+            if _terabox_stop_checker():
+                terabox_state['status'] = 'stopped'
+                terabox_state['message'] = 'Đã dừng bởi người dùng.'
+            elif success:
+                terabox_state['status'] = 'done'
+                terabox_state['message'] = 'Hoàn tất! File đã được copy lên Google Drive.'
+                terabox_state['progress'] = 100
+            else:
+                terabox_state['status'] = 'error'
+                if not terabox_state['message']:
+                    terabox_state['message'] = 'Tải thất bại. Xem console để biết chi tiết.'
+        except Exception as e:
+            terabox_state['status'] = 'error'
+            terabox_state['message'] = 'Lỗi: {0}'.format(str(e))
+
+    t = threading.Thread(target=_run_pipeline, daemon=True)
+    t.start()
+
+    return jsonify({'success': True, 'message': 'Đã bắt đầu tải'})
+
+
+@app.route('/api/terabox/status', methods=['GET'])
+def terabox_status():
+    return jsonify({
+        'status': terabox_state['status'],
+        'progress': terabox_state['progress'],
+        'message': terabox_state['message'],
+        'file_name': terabox_state['file_name'],
+        'file_size_human': terabox_state['file_size_human'],
+        'phase': terabox_state['phase'],
+        'logs': terabox_state['logs'][-50:],
+    })
+
+
+@app.route('/api/terabox/stop', methods=['POST'])
+def terabox_stop():
+    global _terabox_engine
+    terabox_state['stop_flag'] = True
+    if _terabox_engine:
+        _terabox_engine.stop()
+    terabox_state['status'] = 'stopped'
+    terabox_state['message'] = 'Đã dừng bởi người dùng.'
+    return jsonify({'success': True})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, threaded=True)

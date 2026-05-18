@@ -1190,3 +1190,278 @@ window.addEventListener('DOMContentLoaded', async () => {
         });
     }
 });
+
+
+// ==================== TERABOX TAB ====================
+(function () {
+    // DOM elements
+    var tbCookieInput = document.getElementById('teraboxCookie');
+    var tbSaveCookieBtn = document.getElementById('teraboxSaveCookieBtn');
+    var tbCookieStatus = document.getElementById('teraboxCookieStatus');
+    var tbUrlInput = document.getElementById('teraboxUrl');
+    var tbDestInput = document.getElementById('teraboxDest');
+    var tbCheckBtn = document.getElementById('teraboxCheckBtn');
+    var tbStartBtn = document.getElementById('teraboxStartBtn');
+    var tbStopBtn = document.getElementById('teraboxStopBtn');
+    var tbFileInfo = document.getElementById('teraboxFileInfo');
+    var tbFileName = document.getElementById('teraboxFileName');
+    var tbFileSize = document.getElementById('teraboxFileSize');
+    var tbStatusSection = document.getElementById('teraboxStatusSection');
+    var tbStatusText = document.getElementById('teraboxStatusText');
+    var tbPhaseText = document.getElementById('teraboxPhaseText');
+    var tbProgressBar = document.getElementById('teraboxProgressBar');
+    var tbProgressPercent = document.getElementById('teraboxProgressPercent');
+    var tbProgressDetail = document.getElementById('teraboxProgressDetail');
+    var tbConsole = document.getElementById('teraboxConsole');
+
+    // Guard: if elements don't exist (page without terabox tab), bail
+    if (!tbCookieInput || !tbUrlInput) return;
+
+    var tbPollingInterval = null;
+    var tbLastLogCount = 0;
+
+    // ---- Cookie Management ----
+    function tbLoadCookie() {
+        fetch('/api/terabox/cookie')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.has_cookie) {
+                    tbCookieStatus.innerHTML = '✅ Cookie đã lưu (<code>' + data.masked + '</code>)';
+                    tbCookieStatus.style.color = '#22c55e';
+                } else {
+                    tbCookieStatus.innerHTML = '⚠️ Chưa có cookie. Vui lòng nhập và lưu.';
+                    tbCookieStatus.style.color = '#f59e0b';
+                }
+            })
+            .catch(function () {
+                tbCookieStatus.textContent = '❌ Không thể kiểm tra cookie.';
+                tbCookieStatus.style.color = '#ef4444';
+            });
+    }
+
+    function tbSaveCookie() {
+        var val = tbCookieInput.value.trim();
+        if (!val) {
+            alert('Vui lòng nhập cookie ndus!');
+            return;
+        }
+        tbSaveCookieBtn.disabled = true;
+        tbSaveCookieBtn.textContent = '⏳ Đang lưu...';
+
+        fetch('/api/terabox/cookie', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cookie: val })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    tbCookieInput.value = '';
+                    tbLoadCookie();
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không rõ'));
+                }
+            })
+            .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+            .finally(function () {
+                tbSaveCookieBtn.disabled = false;
+                tbSaveCookieBtn.textContent = '💾 Lưu';
+            });
+    }
+
+    // ---- Check File Info ----
+    function tbCheckInfo() {
+        var url = tbUrlInput.value.trim();
+        if (!url) {
+            alert('Vui lòng nhập link Terabox!');
+            return;
+        }
+        if (url.indexOf('terabox') === -1 && url.indexOf('1024tera') === -1) {
+            alert('Link không phải Terabox. Cần link dạng: https://www.terabox.app/s/...');
+            return;
+        }
+
+        tbCheckBtn.disabled = true;
+        tbCheckBtn.textContent = '⏳ Đang kiểm tra...';
+        tbFileInfo.style.display = 'none';
+
+        fetch('/api/terabox/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    tbFileName.textContent = data.file_name;
+                    tbFileSize.textContent = data.file_size_human;
+                    tbFileInfo.style.display = 'block';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không lấy được thông tin file'));
+                }
+            })
+            .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+            .finally(function () {
+                tbCheckBtn.disabled = false;
+                tbCheckBtn.textContent = '🔍 Kiểm tra link';
+            });
+    }
+
+    // ---- Start Pipeline ----
+    function tbStart() {
+        var url = tbUrlInput.value.trim();
+        var dest = tbDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link Terabox!'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        // Convert Google Drive URL if needed
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        tbStartBtn.disabled = true;
+        tbStartBtn.textContent = '⏳ Đang khởi tạo...';
+
+        fetch('/api/terabox/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, destination: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    // Show progress section
+                    tbStatusSection.style.display = 'block';
+                    tbConsole.textContent = 'Đang khởi tạo pipeline...\n';
+                    tbLastLogCount = 0;
+
+                    // Start polling
+                    tbStartPolling();
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể bắt đầu'));
+                    tbStartBtn.disabled = false;
+                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+                tbStartBtn.disabled = false;
+                tbStartBtn.textContent = '🚀 Bắt đầu tải';
+            });
+    }
+
+    // ---- Polling ----
+    function tbStartPolling() {
+        if (tbPollingInterval) clearInterval(tbPollingInterval);
+        tbPollingInterval = setInterval(tbPollStatus, 2000);
+        tbPollStatus(); // immediate first call
+    }
+
+    function tbStopPolling() {
+        if (tbPollingInterval) {
+            clearInterval(tbPollingInterval);
+            tbPollingInterval = null;
+        }
+    }
+
+    function tbPollStatus() {
+        fetch('/api/terabox/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                // Update progress bar
+                var pct = data.progress || 0;
+                tbProgressBar.style.width = pct + '%';
+                tbProgressPercent.textContent = pct + '%';
+
+                // Color based on phase: download=blue, upload=green
+                if (pct <= 50) {
+                    tbProgressBar.style.background = 'linear-gradient(90deg, #3b82f6, #60a5fa)';
+                } else {
+                    tbProgressBar.style.background = 'linear-gradient(90deg, #22c55e, #4ade80)';
+                }
+
+                // Update status text
+                tbStatusText.textContent = data.message || 'Đang xử lý...';
+                tbProgressDetail.textContent = data.file_size_human || '';
+
+                // Phase indicator
+                if (data.status === 'downloading' || pct <= 50) {
+                    tbPhaseText.textContent = '📥 Đang tải từ Terabox';
+                } else if (data.status === 'uploading' || pct > 50) {
+                    tbPhaseText.textContent = '📤 Đang đẩy lên Google Drive';
+                }
+
+                // Render console logs
+                if (data.logs && data.logs.length > 0) {
+                    var newLogs = data.logs.slice(tbLastLogCount);
+                    if (newLogs.length > 0) {
+                        var html = '';
+                        for (var i = 0; i < newLogs.length; i++) {
+                            var log = newLogs[i];
+                            var color = '#a5b4fc'; // default
+                            if (log.level === 'ERROR') color = '#ef4444';
+                            else if (log.level === 'WARNING') color = '#f59e0b';
+                            else if (log.level === 'INFO') color = '#38bdf8';
+                            else if (log.level === 'DEBUG') color = '#64748b';
+
+                            html += '<span style="color:' + color + '">[' + log.time + '] ' + log.msg + '</span>\n';
+                        }
+                        tbConsole.innerHTML += html;
+                        tbLastLogCount = data.logs.length;
+                        // Auto-scroll
+                        tbConsole.scrollTop = tbConsole.scrollHeight;
+                    }
+                }
+
+                // Terminal states
+                if (data.status === 'done') {
+                    tbStopPolling();
+                    tbStatusText.textContent = '✅ ' + (data.message || 'Hoàn tất!');
+                    tbStatusText.style.color = '#22c55e';
+                    tbPhaseText.textContent = '🎉 Xong!';
+                    tbStartBtn.disabled = false;
+                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                } else if (data.status === 'error') {
+                    tbStopPolling();
+                    tbStatusText.textContent = '❌ ' + (data.message || 'Lỗi!');
+                    tbStatusText.style.color = '#ef4444';
+                    tbPhaseText.textContent = '⚠️ Thất bại';
+                    tbStartBtn.disabled = false;
+                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                } else if (data.status === 'stopped') {
+                    tbStopPolling();
+                    tbStatusText.textContent = '⏹ ' + (data.message || 'Đã dừng.');
+                    tbStatusText.style.color = '#f59e0b';
+                    tbStartBtn.disabled = false;
+                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                }
+            })
+            .catch(function () {
+                // Silently ignore polling errors
+            });
+    }
+
+    // ---- Stop ----
+    function tbStop() {
+        fetch('/api/terabox/stop', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                tbStopPolling();
+                tbStatusText.textContent = '⏹ Đã dừng bởi người dùng.';
+                tbStartBtn.disabled = false;
+                tbStartBtn.textContent = '🚀 Bắt đầu tải';
+            })
+            .catch(function (e) { alert('Lỗi: ' + e); });
+    }
+
+    // ---- Event Listeners ----
+    tbSaveCookieBtn.addEventListener('click', tbSaveCookie);
+    tbCheckBtn.addEventListener('click', tbCheckInfo);
+    tbStartBtn.addEventListener('click', tbStart);
+    tbStopBtn.addEventListener('click', tbStop);
+
+    // Load cookie status on page load
+    tbLoadCookie();
+})();
