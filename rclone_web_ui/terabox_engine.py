@@ -131,6 +131,12 @@ class TeraboxEngine:
             
             html = r.text
             
+            # --- Determine API base URL from actual page domain ---
+            from urllib.parse import urlparse
+            page_parsed = urlparse(r.url)
+            api_base = "{0}://{1}".format(page_parsed.scheme, page_parsed.netloc)
+            self.log_callback(logging.DEBUG, "API base: {0}".format(api_base))
+            
             # --- Extract jsToken (multiple methods) ---
             js_token = ""
             for pattern in [
@@ -153,42 +159,42 @@ class TeraboxEngine:
                 
             logid = self._find_between(html, 'dp-logid=', '&')
             
-            # --- Extract sign, timestamp, shareid, uk from HTML (multiple formats) ---
+            # --- Extract bdstoken, shareid, uk from templateData block ---
+            bdstoken = ""
             sign = ""
             timestamp_val = ""
             shareid = ""
             uk = ""
             
-            # Try direct JSON format in HTML
+            # Primary: parse templateData JSON block (most reliable)
+            m_td = re.search(r'var\s+templateData\s*=\s*(\{.*?\});', html)
+            if m_td:
+                try:
+                    td = json.loads(m_td.group(1))
+                    bdstoken = str(td.get('bdstoken', ''))
+                    uk = str(td.get('uk', ''))
+                except Exception:
+                    pass
+            
+            # Fallback: regex for individual values
+            if not bdstoken:
+                m_b = re.search(r'"bdstoken"\s*:\s*"([^"]+)"', html)
+                if m_b: bdstoken = m_b.group(1)
+            if not uk:
+                m_u = re.search(r'"uk"\s*:\s*"(\d+)"', html)
+                if m_u: uk = m_u.group(1)
+            
+            # Try to find sign/timestamp from HTML (rare but possible)
             for pat, var_name in [
                 (r'"sign"\s*:\s*"([^"]+)"', 'sign'),
                 (r'"timestamp"\s*:\s*(\d+)', 'timestamp'),
                 (r'"shareid"\s*:\s*"?(\d+)"?', 'shareid'),
-                (r'"uk"\s*:\s*"?(\d+)"?', 'uk'),
             ]:
                 m = re.search(pat, html)
                 if m:
                     if var_name == 'sign': sign = m.group(1)
                     elif var_name == 'timestamp': timestamp_val = m.group(1)
                     elif var_name == 'shareid': shareid = m.group(1)
-                    elif var_name == 'uk': uk = m.group(1)
-            
-            # Try URL-encoded JSON format
-            if not sign or not timestamp_val:
-                from urllib.parse import unquote
-                decoded = unquote(html)
-                if not sign:
-                    m = re.search(r'"sign"\s*:\s*"([^"]+)"', decoded)
-                    if m: sign = m.group(1)
-                if not timestamp_val:
-                    m = re.search(r'"timestamp"\s*:\s*(\d+)', decoded)
-                    if m: timestamp_val = m.group(1)
-                if not shareid:
-                    m = re.search(r'"shareid"\s*:\s*"?(\d+)"?', decoded)
-                    if m: shareid = m.group(1)
-                if not uk:
-                    m = re.search(r'"uk"\s*:\s*"?(\d+)"?', decoded)
-                    if m: uk = m.group(1)
             
             # --- Extract pcftoken ---
             pcftoken = ""
@@ -244,7 +250,7 @@ class TeraboxEngine:
             if pcftoken:
                 params["pcftoken"] = pcftoken
             
-            r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
+            r2 = session.get("{0}/share/list".format(api_base), params=params, timeout=30)
             data2 = r2.json()
             
             # Log all top-level keys from share/list response for debugging
@@ -252,31 +258,47 @@ class TeraboxEngine:
             self.log_callback(logging.INFO, "share/list keys: {0}".format(response_keys))
             
             if data2.get("errno") != 0:
-                err_msg = data2.get("errmsg", "Không rõ")
-                errno = data2.get("errno")
-                if errno == -6:
-                    return {"error": "Cookie 'ndus' hết hạn. Vui lòng lấy cookie mới."}
-                return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(err_msg, errno)}
+                # Try fallback to www.terabox.app if different domain failed
+                if api_base != "https://www.terabox.app":
+                    self.log_callback(logging.INFO, "Domain {0} failed, trying www.terabox.app...".format(api_base))
+                    r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
+                    data2 = r2.json()
+                
+                if data2.get("errno") != 0:
+                    err_msg = data2.get("errmsg", "Không rõ")
+                    errno = data2.get("errno")
+                    if errno == -6:
+                        return {"error": "Cookie 'ndus' hết hạn. Vui lòng lấy cookie mới."}
+                    return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(err_msg, errno)}
             
             lst = data2.get("list", [])
             if not lst:
                 return {"error": "Link này rỗng hoặc không có file nào."}
             
-            # *** KEY FIX: Extract shareid/uk/sign/timestamp from share/list response ***
+            # *** KEY FIX: Extract shareid/uk from share/list response if not from HTML ***
             if not shareid:
                 shareid = str(data2.get("share_id", data2.get("shareid", "")))
-            if not uk:
-                uk = str(data2.get("uk", ""))
-            if not sign:
-                sign = str(data2.get("sign", ""))
+            if not uk or uk == "0":
+                api_uk = str(data2.get("uk", ""))
+                if api_uk and api_uk != "0":
+                    uk = api_uk
+            
+            # *** COMPUTE SIGN if not found in HTML/API ***
+            if not sign and bdstoken and js_token:
+                sign = self._compute_sign(bdstoken, js_token)
+                self.log_callback(logging.INFO, "Sign computed from bdstoken+jsToken")
+            
+            # Use server_time as timestamp if not found
             if not timestamp_val:
-                timestamp_val = str(data2.get("timestamp", ""))
+                timestamp_val = str(data2.get("server_time", ""))
+                if not timestamp_val:
+                    timestamp_val = str(int(time.time()))
             
             self.log_callback(logging.INFO,
                 "Params: shareid={0}, uk={1}, sign={2}, ts={3}".format(
                     shareid if shareid else "MISSING",
                     uk if uk else "MISSING", 
-                    sign[:10] if sign else "MISSING",
+                    sign[:10] + "..." if sign else "MISSING",
                     timestamp_val if timestamp_val else "MISSING"))
             
             file_info = lst[0]
@@ -314,12 +336,22 @@ class TeraboxEngine:
                     dl_params["pcftoken"] = pcftoken
                     
                 try:
-                    r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
+                    # Try with actual page domain first
+                    r3 = session.get("{0}/share/download".format(api_base), params=dl_params, timeout=30)
                     data3 = r3.json()
+                    self.log_callback(logging.DEBUG, "share/download errno: {0}".format(data3.get('errno')))
                     if data3.get("errno") == 0:
                         dlink = data3.get("dlink", "")
                         if not dlink and data3.get("list"):
                             dlink = data3["list"][0].get("dlink", "")
+                    elif api_base != "https://www.terabox.app":
+                        # Fallback to www.terabox.app
+                        r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
+                        data3 = r3.json()
+                        if data3.get("errno") == 0:
+                            dlink = data3.get("dlink", "")
+                            if not dlink and data3.get("list"):
+                                dlink = data3["list"][0].get("dlink", "")
                 except Exception as e:
                     self.log_callback(logging.WARNING, "share/download: {0}".format(str(e)))
             
@@ -698,6 +730,31 @@ class TeraboxEngine:
                 pass
 
     # ==================== HELPERS ====================
+
+    @staticmethod
+    def _compute_sign(j, r):
+        """RC4 cipher to compute Terabox 'sign' parameter.
+        j = key (e.g. bdstoken), r = data (e.g. jsToken)
+        """
+        import base64
+        a = []
+        p = list(range(256))
+        o_chars = []
+        v = len(j)
+        for q in range(256):
+            a.append(ord(j[q % v]))
+        u = 0
+        for q in range(256):
+            u = (u + p[q] + a[q]) % 256
+            p[q], p[u] = p[u], p[q]
+        i = u = 0
+        for q in range(len(r)):
+            i = (i + 1) % 256
+            u = (u + p[i]) % 256
+            p[i], p[u] = p[u], p[i]
+            k = p[(p[i] + p[u]) % 256]
+            o_chars.append(chr(ord(r[q]) ^ k))
+        return base64.b64encode(''.join(o_chars).encode('latin-1')).decode()
 
     @staticmethod
     def _human_size(size_bytes):
