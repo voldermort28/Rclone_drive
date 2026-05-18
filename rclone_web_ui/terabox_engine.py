@@ -339,7 +339,7 @@ class TeraboxEngine:
                         full_url
                     ]
                     
-                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
                     out, err = process.communicate(timeout=30)
                     
                     if process.returncode == 0 and out.strip():
