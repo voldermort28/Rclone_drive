@@ -20,6 +20,13 @@ try:
 except ImportError:
     requests = None
 
+# Optional: TeraboxDL for sign computation
+try:
+    from TeraboxDL import TeraboxDL
+    HAS_TERABOXDL = True
+except ImportError:
+    HAS_TERABOXDL = False
+
 
 class TeraboxEngine:
     """Engine to handle Terabox download -> Google Drive upload pipeline."""
@@ -288,6 +295,9 @@ class TeraboxEngine:
             if is_dir == "1":
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
             
+            # For info-check, we already have what we need (name + size)
+            # Try to get dlink but don't fail if we can't
+            
             # 3. If no dlink, try /share/download with extracted params
             if not dlink and fs_id and sign and timestamp_val and shareid and uk:
                 self.log_callback(logging.INFO, "Đang lấy link tải qua share/download...")
@@ -312,73 +322,71 @@ class TeraboxEngine:
                 try:
                     r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
                     data3 = r3.json()
-                    self.log_callback(logging.DEBUG, "share/download errno: {0}".format(data3.get("errno")))
-                    
                     if data3.get("errno") == 0:
                         dlink = data3.get("dlink", "")
                         if not dlink and data3.get("list"):
                             dlink = data3["list"][0].get("dlink", "")
-                    else:
-                        self.log_callback(logging.WARNING,
-                            "share/download failed (errno: {0})".format(data3.get("errno")))
                 except Exception as e:
-                    self.log_callback(logging.WARNING, "share/download exception: {0}".format(str(e)))
+                    self.log_callback(logging.WARNING, "share/download: {0}".format(str(e)))
             
-            # 4. Final fallback: try third-party proxy API
+            # 4. Try TeraboxDL library if available
+            if not dlink and HAS_TERABOXDL:
+                self.log_callback(logging.INFO, "Đang thử TeraboxDL library...")
+                try:
+                    cookie_header_val = self._build_cookie_header(cookie)
+                    tb = TeraboxDL(cookie_header_val)
+                    tb_info = tb.get_file_info(full_url, direct_url=True)
+                    if tb_info and "error" not in tb_info:
+                        dlink = tb_info.get("download_link", "")
+                        if dlink:
+                            self.log_callback(logging.INFO, "TeraboxDL: lấy link thành công!")
+                except Exception as e:
+                    self.log_callback(logging.WARNING, "TeraboxDL: {0}".format(str(e)))
+            
+            # 5. Final fallback: proxy API
             if not dlink:
-                self.log_callback(logging.INFO, "Đang thử phương thức dự phòng (proxy API)...")
-                short_url_key = surl
+                self.log_callback(logging.INFO, "Đang thử proxy API dự phòng...")
                 try:
                     proxy_r = requests.get(
                         "https://terabox-dl.qtcloud.workers.dev/api/get-info",
-                        params={"shorturl": short_url_key, "pwd": ""},
+                        params={"shorturl": surl, "pwd": ""},
                         headers={"User-Agent": headers["User-Agent"]},
                         timeout=15,
                     )
                     proxy_data = proxy_r.json()
                     if proxy_data.get("ok") and proxy_data.get("list"):
-                        # Got sign/timestamp/shareid/uk from proxy
-                        p_sign = proxy_data.get("sign", sign)
-                        p_ts = str(proxy_data.get("timestamp", timestamp_val))
-                        p_sid = str(proxy_data.get("shareid", shareid))
-                        p_uk = str(proxy_data.get("uk", uk))
+                        p_sign = proxy_data.get("sign", "")
+                        p_ts = str(proxy_data.get("timestamp", ""))
+                        p_sid = str(proxy_data.get("shareid", ""))
+                        p_uk = str(proxy_data.get("uk", ""))
                         
                         if p_sign and p_ts and p_sid and p_uk:
-                            # Now call get-download via proxy
                             dl_r = requests.post(
                                 "https://terabox-dl.qtcloud.workers.dev/api/get-download",
-                                json={
-                                    "shareid": p_sid,
-                                    "uk": p_uk,
-                                    "sign": p_sign,
-                                    "timestamp": p_ts,
-                                    "fs_id": fs_id,
-                                },
+                                json={"shareid": p_sid, "uk": p_uk, "sign": p_sign,
+                                      "timestamp": p_ts, "fs_id": fs_id},
                                 headers={"User-Agent": headers["User-Agent"]},
                                 timeout=15,
                             )
                             dl_data = dl_r.json()
                             if dl_data.get("ok") and dl_data.get("downloadLink"):
                                 dlink = dl_data["downloadLink"]
-                                self.log_callback(logging.INFO, "Lấy link tải từ proxy thành công!")
+                                self.log_callback(logging.INFO, "Proxy: lấy link thành công!")
                 except Exception as e:
-                    self.log_callback(logging.WARNING, "Proxy API fallback failed: {0}".format(str(e)))
+                    self.log_callback(logging.WARNING, "Proxy: {0}".format(str(e)))
             
-            if not dlink:
-                diag = "shareid={0}, uk={1}, sign={2}, ts={3}, fs_id={4}".format(
-                    'OK' if shareid else 'MISS',
-                    'OK' if uk else 'MISS',
-                    'OK' if sign else 'MISS',
-                    'OK' if timestamp_val else 'MISS',
-                    'OK' if fs_id else 'MISS')
-                return {"error": "Không thể lấy link tải. Diag: [{0}]. Thử cập nhật cookie mới.".format(diag)}
-                
-            return {
+            # Return result - file info is always available, dlink may be empty
+            result = {
                 "file_name": file_name,
                 "file_size": file_size,
                 "file_size_human": self._human_size(file_size),
                 "download_url": dlink,
             }
+            
+            if not dlink:
+                self.log_callback(logging.WARNING, "Chưa lấy được link tải. Sẽ thử lại khi bắt đầu download.")
+            
+            return result
 
         except requests.exceptions.Timeout:
             return {"error": "Kết nối tới Terabox bị timeout. Vui lòng thử lại."}
