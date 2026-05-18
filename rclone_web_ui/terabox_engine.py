@@ -20,12 +20,12 @@ try:
 except ImportError:
     requests = None
 
-# Optional: TeraboxDL for sign computation
+# Optional: yt-dlp for Terabox URL extraction
 try:
-    from TeraboxDL import TeraboxDL
-    HAS_TERABOXDL = True
+    import yt_dlp
+    HAS_YTDLP = True
 except ImportError:
-    HAS_TERABOXDL = False
+    HAS_YTDLP = False
 
 
 class TeraboxEngine:
@@ -329,19 +329,31 @@ class TeraboxEngine:
                 except Exception as e:
                     self.log_callback(logging.WARNING, "share/download: {0}".format(str(e)))
             
-            # 4. Try TeraboxDL library if available
-            if not dlink and HAS_TERABOXDL:
-                self.log_callback(logging.INFO, "Đang thử TeraboxDL library...")
+            # 4. Try yt-dlp if available (handles sign computation internally)
+            if not dlink and HAS_YTDLP:
+                self.log_callback(logging.INFO, "Đang thử yt-dlp extractor...")
                 try:
                     cookie_header_val = self._build_cookie_header(cookie)
-                    tb = TeraboxDL(cookie_header_val)
-                    tb_info = tb.get_file_info(full_url, direct_url=True)
-                    if tb_info and "error" not in tb_info:
-                        dlink = tb_info.get("download_link", "")
-                        if dlink:
-                            self.log_callback(logging.INFO, "TeraboxDL: lấy link thành công!")
+                    ydl_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'extract_flat': False,
+                        'http_headers': {
+                            'Cookie': cookie_header_val,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                        },
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        yt_info = ydl.extract_info(full_url, download=False)
+                        if yt_info:
+                            dlink = yt_info.get('url', '')
+                            if not dlink and yt_info.get('formats'):
+                                # Get best format URL
+                                dlink = yt_info['formats'][-1].get('url', '')
+                            if dlink:
+                                self.log_callback(logging.INFO, "yt-dlp: lấy link thành công!")
                 except Exception as e:
-                    self.log_callback(logging.WARNING, "TeraboxDL: {0}".format(str(e)))
+                    self.log_callback(logging.WARNING, "yt-dlp: {0}".format(str(e)))
             
             # 5. Final fallback: proxy API
             if not dlink:
