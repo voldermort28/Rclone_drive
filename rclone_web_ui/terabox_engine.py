@@ -17,15 +17,7 @@ import json
 
 try:
     import requests
-except ImportError:
-    requests = None
-
-# Optional: yt-dlp for Terabox URL extraction
-try:
-    import yt_dlp
-    HAS_YTDLP = True
-except ImportError:
-    HAS_YTDLP = False
+# We will use subprocess to call yt-dlp CLI instead of importing it
 
 
 class TeraboxEngine:
@@ -329,31 +321,36 @@ class TeraboxEngine:
                 except Exception as e:
                     self.log_callback(logging.WARNING, "share/download: {0}".format(str(e)))
             
-            # 4. Try yt-dlp if available (handles sign computation internally)
-            if not dlink and HAS_YTDLP:
+            # 4. Try yt-dlp CLI if available (handles sign computation internally)
+            if not dlink:
                 self.log_callback(logging.INFO, "Đang thử yt-dlp extractor...")
                 try:
                     cookie_header_val = self._build_cookie_header(cookie)
-                    ydl_opts = {
-                        'quiet': True,
-                        'no_warnings': True,
-                        'extract_flat': False,
-                        'http_headers': {
-                            'Cookie': cookie_header_val,
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-                        },
-                    }
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        yt_info = ydl.extract_info(full_url, download=False)
-                        if yt_info:
-                            dlink = yt_info.get('url', '')
-                            if not dlink and yt_info.get('formats'):
-                                # Get best format URL
-                                dlink = yt_info['formats'][-1].get('url', '')
-                            if dlink:
-                                self.log_callback(logging.INFO, "yt-dlp: lấy link thành công!")
+                    # Use subprocess to call yt-dlp directly (bypasses python env issues)
+                    import subprocess
+                    cmd = [
+                        'yt-dlp',
+                        '-g',  # get url only
+                        '--no-warnings',
+                        '--add-header', f'Cookie: {cookie_header_val}',
+                        '--add-header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                        full_url
+                    ]
+                    
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    out, err = process.communicate(timeout=30)
+                    
+                    if process.returncode == 0 and out.strip():
+                        urls = out.strip().split('\n')
+                        if urls:
+                            dlink = urls[-1]  # Get the last URL if multiple formats
+                            self.log_callback(logging.INFO, "yt-dlp: lấy link thành công!")
+                    else:
+                        err_msg = err.strip() if err else "Unknown error"
+                        self.log_callback(logging.WARNING, f"yt-dlp thất bại: {err_msg}")
+                        
                 except Exception as e:
-                    self.log_callback(logging.WARNING, "yt-dlp: {0}".format(str(e)))
+                    self.log_callback(logging.WARNING, "Lỗi chạy yt-dlp: {0}".format(str(e)))
             
             # 5. Final fallback: proxy API
             if not dlink:
