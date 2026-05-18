@@ -91,7 +91,14 @@ class TeraboxEngine:
         return s[start_index:end_index]
 
     def get_file_info(self, url, cookie):
-        """Get file information from a Terabox share link."""
+        """Get file information from a Terabox share link.
+        
+        Strategy:
+        1. Fetch share page HTML to extract jsToken
+        2. Call /share/list to get file list + shareid/uk/sign/timestamp
+        3. If dlink missing, call /share/download with extracted params
+        4. If sign/timestamp missing from both HTML and JSON, try proxy API
+        """
         if requests is None:
             return {"error": "Module 'requests' not installed. Run: pip install requests"}
 
@@ -101,11 +108,10 @@ class TeraboxEngine:
 
         cookie_header = self._build_cookie_header(cookie)
         headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
             "Connection": "keep-alive",
             "DNT": "1",
-            "Host": "www.terabox.app",
             "Upgrade-Insecure-Requests": "1",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
             "Cookie": cookie_header,
@@ -114,45 +120,82 @@ class TeraboxEngine:
         try:
             self.log_callback(logging.INFO, "Đang lấy thông tin xác thực từ trang...")
             
-            # Use session to handle redirects automatically
             session = requests.Session()
             session.headers.update(headers)
             
-            # 1. Fetch initial link to get redirected to the actual page and get tokens
+            # 1. Fetch share page to get jsToken and other embedded data
             r = session.get(full_url, timeout=30)
             if not r.ok:
                 return {"error": "Lỗi truy cập link Terabox. Mã lỗi: {0}".format(r.status_code)}
             
             html = r.text
             
-            # Try multiple ways to find jsToken
+            # --- Extract jsToken (multiple methods) ---
             js_token = ""
-            m_js = re.search(r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
-            if m_js:
-                js_token = m_js.group(1)
-            else:
-                js_token = self._find_between(html, 'fn%28%22', '%22%29')
+            for pattern in [
+                r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+                r'fn%28%22(.*?)%22%29',
+                r'"jsToken"\s*:\s*"([^"]+)"',
+            ]:
+                m = re.search(pattern, html)
+                if m:
+                    js_token = m.group(1)
+                    break
+            
+            # Also try URL-decoded version
+            if not js_token:
+                from urllib.parse import unquote
+                decoded_html = unquote(html)
+                m = re.search(r'fn\("([^"]+)"\)', decoded_html)
+                if m:
+                    js_token = m.group(1)
                 
-            # dp-logid is no longer used by newer Terabox API versions, but keep it if it exists
             logid = self._find_between(html, 'dp-logid=', '&')
             
-            # Try to extract pcftoken if it exists
+            # --- Extract sign, timestamp, shareid, uk from HTML (multiple formats) ---
+            sign = ""
+            timestamp_val = ""
+            shareid = ""
+            uk = ""
+            
+            # Try direct JSON format in HTML
+            for pat, var_name in [
+                (r'"sign"\s*:\s*"([^"]+)"', 'sign'),
+                (r'"timestamp"\s*:\s*(\d+)', 'timestamp'),
+                (r'"shareid"\s*:\s*"?(\d+)"?', 'shareid'),
+                (r'"uk"\s*:\s*"?(\d+)"?', 'uk'),
+            ]:
+                m = re.search(pat, html)
+                if m:
+                    if var_name == 'sign': sign = m.group(1)
+                    elif var_name == 'timestamp': timestamp_val = m.group(1)
+                    elif var_name == 'shareid': shareid = m.group(1)
+                    elif var_name == 'uk': uk = m.group(1)
+            
+            # Try URL-encoded JSON format
+            if not sign or not timestamp_val:
+                from urllib.parse import unquote
+                decoded = unquote(html)
+                if not sign:
+                    m = re.search(r'"sign"\s*:\s*"([^"]+)"', decoded)
+                    if m: sign = m.group(1)
+                if not timestamp_val:
+                    m = re.search(r'"timestamp"\s*:\s*(\d+)', decoded)
+                    if m: timestamp_val = m.group(1)
+                if not shareid:
+                    m = re.search(r'"shareid"\s*:\s*"?(\d+)"?', decoded)
+                    if m: shareid = m.group(1)
+                if not uk:
+                    m = re.search(r'"uk"\s*:\s*"?(\d+)"?', decoded)
+                    if m: uk = m.group(1)
+            
+            # --- Extract pcftoken ---
             pcftoken = ""
             m_pcf = re.search(r'pcftoken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
             if m_pcf:
                 pcftoken = m_pcf.group(1)
-                
-            # Extract Baidu/Dubox specific vars for download API
-            sign = self._find_between(html, '"sign":"', '"')
-            timestamp_val = self._find_between(html, '"timestamp":', ',')
-            shareid = self._find_between(html, '"shareid":', ',')
-            if shareid and shareid.startswith('"'):
-                shareid = shareid.replace('"', '')
-            uk = self._find_between(html, '"uk":', ',')
-            if uk and uk.startswith('"'):
-                uk = uk.replace('"', '')
             
-            # Extract surl from the final URL query
+            # --- Extract surl ---
             from urllib.parse import urlparse, parse_qs
             parsed = urlparse(r.url)
             query = parse_qs(parsed.query)
@@ -161,8 +204,12 @@ class TeraboxEngine:
             if "surl" in query:
                 surl = query["surl"][0]
             else:
-                # Try to extract from path (e.g. /s/1xxxxxx -> 1xxxxxx)
                 m = re.search(r'/s/1([A-Za-z0-9_-]+)', r.url)
+                if m:
+                    surl = "1" + m.group(1)
+            # Also try from original URL if redirect lost it
+            if not surl:
+                m = re.search(r'/s/1([A-Za-z0-9_-]+)', full_url)
                 if m:
                     surl = "1" + m.group(1)
             
@@ -170,14 +217,13 @@ class TeraboxEngine:
                 return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
                 
             if not js_token:
-                # If we couldn't find jsToken, the cookie might be invalid or page structure changed
                 if "error/404" in r.url or "not found" in html.lower():
                     return {"error": "Link Terabox không tồn tại hoặc đã bị xóa."}
-                return {"error": "Không lấy được token xác thực (jsToken). Cookie 'ndus' có thể đã hết hạn hoặc Terabox yêu cầu captcha."}
+                return {"error": "Không lấy được jsToken. Cookie 'ndus' có thể đã hết hạn hoặc Terabox yêu cầu captcha."}
 
-            self.log_callback(logging.INFO, "Đã lấy được token. Đang lấy danh sách file...")
+            self.log_callback(logging.INFO, "Đã lấy được jsToken. Đang lấy danh sách file...")
 
-            # 2. Get file list using the extracted tokens
+            # 2. Call /share/list to get file metadata
             params = {
                 "app_id": "250528",
                 "web": "1",
@@ -202,24 +248,45 @@ class TeraboxEngine:
             
             if data2.get("errno") != 0:
                 err_msg = data2.get("errmsg", "Không rõ")
-                return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(err_msg, data2.get("errno"))}
+                errno = data2.get("errno")
+                if errno == -6:
+                    return {"error": "Cookie 'ndus' hết hạn. Vui lòng lấy cookie mới."}
+                return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(err_msg, errno)}
             
             lst = data2.get("list", [])
             if not lst:
                 return {"error": "Link này rỗng hoặc không có file nào."}
             
-            file_info = lst[0]
-            file_name = file_info.get("server_filename")
-            file_size = int(file_info.get("size", 0))
-            is_dir = file_info.get("isdir")
-            dlink = file_info.get("dlink")
-            fs_id = file_info.get("fs_id")
+            # *** KEY FIX: Extract shareid/uk/sign/timestamp from share/list response ***
+            if not shareid:
+                shareid = str(data2.get("share_id", data2.get("shareid", "")))
+            if not uk:
+                uk = str(data2.get("uk", ""))
+            if not sign:
+                sign = str(data2.get("sign", ""))
+            if not timestamp_val:
+                timestamp_val = str(data2.get("timestamp", ""))
             
-            if str(is_dir) == "1":
+            self.log_callback(logging.DEBUG,
+                "Extracted: shareid={0}, uk={1}, sign={2}, ts={3}".format(
+                    shareid[:6] if shareid else "N/A",
+                    uk[:6] if uk else "N/A", 
+                    sign[:6] if sign else "N/A",
+                    timestamp_val[:6] if timestamp_val else "N/A"))
+            
+            file_info = lst[0]
+            file_name = file_info.get("server_filename", "unknown")
+            file_size = int(file_info.get("size", 0))
+            is_dir = str(file_info.get("isdir", "0"))
+            dlink = file_info.get("dlink", "")
+            fs_id = str(file_info.get("fs_id", ""))
+            
+            if is_dir == "1":
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
-                
+            
+            # 3. If no dlink, try /share/download with extracted params
             if not dlink and fs_id and sign and timestamp_val and shareid and uk:
-                self.log_callback(logging.INFO, "Không có dlink từ share/list, đang gọi share/download...")
+                self.log_callback(logging.INFO, "Đang lấy link tải qua share/download...")
                 dl_params = {
                     "app_id": "250528",
                     "web": "1",
@@ -231,28 +298,70 @@ class TeraboxEngine:
                     "shareid": shareid,
                     "uk": uk,
                     "primaryid": shareid,
-                    "fid_list": f"[{fs_id}]"
+                    "fid_list": "[{0}]".format(fs_id),
                 }
-                if logid: dl_params["dp-logid"] = logid
-                if pcftoken: dl_params["pcftoken"] = pcftoken
+                if logid:
+                    dl_params["dp-logid"] = logid
+                if pcftoken:
+                    dl_params["pcftoken"] = pcftoken
                     
-                r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
-                data3 = r3.json()
-                if data3.get("errno") == 0:
-                    if "dlink" in data3:
-                        dlink = data3["dlink"]
-                    elif "list" in data3 and len(data3["list"]) > 0:
-                        dlink = data3["list"][0].get("dlink")
-                
-                if not dlink:
-                    import json
-                    debug_info = json.dumps(data3, ensure_ascii=False)
-                    return {"error": f"share/download thất bại. Data: {debug_info}"}
-
+                try:
+                    r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
+                    data3 = r3.json()
+                    self.log_callback(logging.DEBUG, "share/download errno: {0}".format(data3.get("errno")))
+                    
+                    if data3.get("errno") == 0:
+                        dlink = data3.get("dlink", "")
+                        if not dlink and data3.get("list"):
+                            dlink = data3["list"][0].get("dlink", "")
+                    else:
+                        self.log_callback(logging.WARNING,
+                            "share/download failed (errno: {0})".format(data3.get("errno")))
+                except Exception as e:
+                    self.log_callback(logging.WARNING, "share/download exception: {0}".format(str(e)))
+            
+            # 4. Final fallback: try third-party proxy API
             if not dlink:
-                import json
-                debug_info = json.dumps(file_info, ensure_ascii=False)
-                return {"error": f"Không tìm thấy biến xác thực (sign/timestamp) hoặc Terabox không trả về dlink. Data: {debug_info}"}
+                self.log_callback(logging.INFO, "Đang thử phương thức dự phòng (proxy API)...")
+                short_url_key = surl
+                try:
+                    proxy_r = requests.get(
+                        "https://terabox-dl.qtcloud.workers.dev/api/get-info",
+                        params={"shorturl": short_url_key, "pwd": ""},
+                        headers={"User-Agent": headers["User-Agent"]},
+                        timeout=15,
+                    )
+                    proxy_data = proxy_r.json()
+                    if proxy_data.get("ok") and proxy_data.get("list"):
+                        # Got sign/timestamp/shareid/uk from proxy
+                        p_sign = proxy_data.get("sign", sign)
+                        p_ts = str(proxy_data.get("timestamp", timestamp_val))
+                        p_sid = str(proxy_data.get("shareid", shareid))
+                        p_uk = str(proxy_data.get("uk", uk))
+                        
+                        if p_sign and p_ts and p_sid and p_uk:
+                            # Now call get-download via proxy
+                            dl_r = requests.post(
+                                "https://terabox-dl.qtcloud.workers.dev/api/get-download",
+                                json={
+                                    "shareid": p_sid,
+                                    "uk": p_uk,
+                                    "sign": p_sign,
+                                    "timestamp": p_ts,
+                                    "fs_id": fs_id,
+                                },
+                                headers={"User-Agent": headers["User-Agent"]},
+                                timeout=15,
+                            )
+                            dl_data = dl_r.json()
+                            if dl_data.get("ok") and dl_data.get("downloadLink"):
+                                dlink = dl_data["downloadLink"]
+                                self.log_callback(logging.INFO, "Lấy link tải từ proxy thành công!")
+                except Exception as e:
+                    self.log_callback(logging.WARNING, "Proxy API fallback failed: {0}".format(str(e)))
+            
+            if not dlink:
+                return {"error": "Không thể lấy link tải. Thử lại sau hoặc cập nhật cookie mới."}
                 
             return {
                 "file_name": file_name,
