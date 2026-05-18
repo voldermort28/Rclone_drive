@@ -246,6 +246,10 @@ class TeraboxEngine:
             r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
             data2 = r2.json()
             
+            # Log all top-level keys from share/list response for debugging
+            response_keys = [k for k in data2.keys() if k != 'list']
+            self.log_callback(logging.INFO, "share/list keys: {0}".format(response_keys))
+            
             if data2.get("errno") != 0:
                 err_msg = data2.get("errmsg", "Không rõ")
                 errno = data2.get("errno")
@@ -267,12 +271,12 @@ class TeraboxEngine:
             if not timestamp_val:
                 timestamp_val = str(data2.get("timestamp", ""))
             
-            self.log_callback(logging.DEBUG,
-                "Extracted: shareid={0}, uk={1}, sign={2}, ts={3}".format(
-                    shareid[:6] if shareid else "N/A",
-                    uk[:6] if uk else "N/A", 
-                    sign[:6] if sign else "N/A",
-                    timestamp_val[:6] if timestamp_val else "N/A"))
+            self.log_callback(logging.INFO,
+                "Params: shareid={0}, uk={1}, sign={2}, ts={3}".format(
+                    shareid if shareid else "MISSING",
+                    uk if uk else "MISSING", 
+                    sign[:10] if sign else "MISSING",
+                    timestamp_val if timestamp_val else "MISSING"))
             
             file_info = lst[0]
             file_name = file_info.get("server_filename", "unknown")
@@ -361,7 +365,13 @@ class TeraboxEngine:
                     self.log_callback(logging.WARNING, "Proxy API fallback failed: {0}".format(str(e)))
             
             if not dlink:
-                return {"error": "Không thể lấy link tải. Thử lại sau hoặc cập nhật cookie mới."}
+                diag = "shareid={0}, uk={1}, sign={2}, ts={3}, fs_id={4}".format(
+                    'OK' if shareid else 'MISS',
+                    'OK' if uk else 'MISS',
+                    'OK' if sign else 'MISS',
+                    'OK' if timestamp_val else 'MISS',
+                    'OK' if fs_id else 'MISS')
+                return {"error": "Không thể lấy link tải. Diag: [{0}]. Thử cập nhật cookie mới.".format(diag)}
                 
             return {
                 "file_name": file_name,
