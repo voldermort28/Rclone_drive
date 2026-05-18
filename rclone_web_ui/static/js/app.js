@@ -1220,6 +1220,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     var tbPollingInterval = null;
     var tbLastLogCount = 0;
 
+    // Restore from localStorage
+    var savedTbLink = localStorage.getItem('tb_link');
+    var savedTbDest = localStorage.getItem('tb_dest');
+    if (savedTbLink) tbUrlInput.value = savedTbLink;
+    if (savedTbDest) tbDestInput.value = savedTbDest;
+
     // ---- Cookie Management ----
     function tbLoadCookie() {
         fetch('/api/terabox/cookie')
@@ -1314,6 +1320,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 
         if (!url) { alert('Vui lòng nhập link Terabox!'); return; }
         if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        // Save to localStorage
+        localStorage.setItem('tb_link', url);
+        localStorage.setItem('tb_dest', dest);
 
         // Convert Google Drive URL if needed
         if (dest.indexOf('drive.google.com') > -1) {

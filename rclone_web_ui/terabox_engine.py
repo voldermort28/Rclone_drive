@@ -209,7 +209,9 @@ class TeraboxEngine:
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
                 
             if not dlink:
-                return {"error": "Terabox không trả về link tải trực tiếp (dlink)."}
+                import json
+                debug_info = json.dumps(file_info, ensure_ascii=False)
+                return {"error": f"Terabox không trả về dlink. Data: {debug_info}"}
                 
             return {
                 "file_name": file_name,
