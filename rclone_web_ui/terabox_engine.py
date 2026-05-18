@@ -124,8 +124,23 @@ class TeraboxEngine:
                 return {"error": "Lỗi truy cập link Terabox. Mã lỗi: {0}".format(r.status_code)}
             
             html = r.text
-            js_token = self._find_between(html, 'fn%28%22', '%22%29')
+            
+            # Try multiple ways to find jsToken
+            js_token = ""
+            m_js = re.search(r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
+            if m_js:
+                js_token = m_js.group(1)
+            else:
+                js_token = self._find_between(html, 'fn%28%22', '%22%29')
+                
+            # dp-logid is no longer used by newer Terabox API versions, but keep it if it exists
             logid = self._find_between(html, 'dp-logid=', '&')
+            
+            # Try to extract pcftoken if it exists
+            pcftoken = ""
+            m_pcf = re.search(r'pcftoken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
+            if m_pcf:
+                pcftoken = m_pcf.group(1)
             
             # Extract surl from the final URL query
             from urllib.parse import urlparse, parse_qs
@@ -144,11 +159,11 @@ class TeraboxEngine:
             if not surl:
                 return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
                 
-            if not js_token or not logid:
-                # If we couldn't find tokens, the cookie might be invalid or page structure changed
+            if not js_token:
+                # If we couldn't find jsToken, the cookie might be invalid or page structure changed
                 if "error/404" in r.url or "not found" in html.lower():
                     return {"error": "Link Terabox không tồn tại hoặc đã bị xóa."}
-                return {"error": "Không lấy được token xác thực. Cookie 'ndus' có thể đã hết hạn hoặc Terabox yêu cầu captcha."}
+                return {"error": "Không lấy được token xác thực (jsToken). Cookie 'ndus' có thể đã hết hạn hoặc Terabox yêu cầu captcha."}
 
             self.log_callback(logging.INFO, "Đã lấy được token. Đang lấy danh sách file...")
 
@@ -159,7 +174,6 @@ class TeraboxEngine:
                 "channel": "dubox",
                 "clienttype": "0",
                 "jsToken": js_token,
-                "dp-logid": logid,
                 "page": "1",
                 "num": "20",
                 "by": "name",
@@ -168,6 +182,10 @@ class TeraboxEngine:
                 "shorturl": surl,
                 "root": "1",
             }
+            if logid:
+                params["dp-logid"] = logid
+            if pcftoken:
+                params["pcftoken"] = pcftoken
             
             r2 = session.get("https://www.terabox.app/share/list", params=params, timeout=30)
             data2 = r2.json()
