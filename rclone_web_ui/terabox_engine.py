@@ -14,6 +14,8 @@ import shutil
 import time
 import uuid
 import json
+import sys
+import hashlib
 
 try:
     import requests
@@ -29,13 +31,15 @@ class TeraboxEngine:
     CHUNK_SIZE = 8192  # 8KB chunks for streaming download
     PROGRESS_THROTTLE = 5  # seconds between progress updates (slow download)
 
-    def __init__(self, progress_callback, log_callback, stop_checker):
+    def __init__(self, progress_callback, log_callback, stop_checker, state_callback=None):
         self.progress_callback = progress_callback
         self.log_callback = log_callback
         self.stop_checker = stop_checker
+        self.state_callback = state_callback
         self._process = None
         self._response = None  # for cancelling download stream
         self._stopped = False
+        self._download_error = ''
 
     # ==================== BINARY DETECTION (copied from rclone_engine) ====================
 
@@ -91,6 +95,89 @@ class TeraboxEngine:
         if end_index == -1: return ""
         return s[start_index:end_index]
 
+    def _emit_state(self, **kwargs):
+        """Send structured state back to Flask without coupling this engine to app.py."""
+        if not self.state_callback:
+            return
+        try:
+            self.state_callback(kwargs)
+        except Exception:
+            pass
+
+    def _extract_first(self, text, patterns):
+        """Return the first regex capture found in text."""
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if m:
+                return m.group(1)
+        return ""
+
+    def _extract_share_field(self, text, names, numeric=False):
+        """Extract Terabox fields from quoted JSON, JS object, or escaped script blobs."""
+        value_pattern = r'["\']?(\d+)["\']?' if numeric else r'["\']([^"\']+)["\']'
+        patterns = []
+        for name in names:
+            patterns.extend([
+                r'["\']{0}["\']\s*:\s*{1}'.format(re.escape(name), value_pattern),
+                r'{0}\s*[:=]\s*{1}'.format(re.escape(name), value_pattern),
+                r'%22{0}%22%3A%22([^%]+)%22'.format(re.escape(name)),
+            ])
+        return self._extract_first(text, patterns)
+
+    def _pick_first(self, data, keys):
+        for key in keys:
+            val = data.get(key)
+            if val is not None and val != "":
+                return str(val)
+        return ""
+
+    def _path_for_io(self, path):
+        """Return a path suitable for CentOS 7 ASCII filesystem encoding."""
+        if isinstance(path, bytes):
+            return path
+        if sys.getfilesystemencoding().lower() == 'ascii':
+            return path.encode('utf-8')
+        return path
+
+    def _resume_dir_for_url(self, url):
+        key_source = url
+        m = re.search(r'[?&]surl=([^&#]+)', url)
+        if not m:
+            m = re.search(r'/s/([A-Za-z0-9_-]+)', url)
+            if m:
+                surl = m.group(1)
+                if surl.startswith('1') and len(surl) > 8:
+                    surl = surl[1:]
+                key_source = 'surl=' + surl
+        else:
+            surl = m.group(1)
+            if surl.startswith('1') and len(surl) > 8:
+                surl = surl[1:]
+            key_source = 'surl=' + surl
+        key = hashlib.sha1(key_source.encode('utf-8')).hexdigest()[:24]
+        return os.path.join('/tmp', 'terabox_dl', key)
+
+    def _write_resume_meta(self, tmp_dir, meta):
+        try:
+            os.makedirs(tmp_dir, exist_ok=True)
+            meta_path = os.path.join(tmp_dir, 'resume.json')
+            with open(meta_path, 'w') as f:
+                json.dump(meta, f)
+        except Exception as e:
+            self.log_callback(logging.DEBUG, "Không ghi được resume metadata: {0}".format(str(e)))
+
+    def _validate_content_range(self, content_range, start, total_size):
+        if not content_range:
+            return False
+        m = re.match(r'bytes\s+(\d+)-(\d+)/(\d+|\*)', content_range.strip(), re.I)
+        if not m:
+            return False
+        if int(m.group(1)) != start:
+            return False
+        if total_size > 0 and m.group(3) != '*' and int(m.group(3)) != total_size:
+            return False
+        return True
+
     def get_file_info(self, url, cookie):
         """Get file information from a Terabox share link.
         
@@ -135,27 +222,24 @@ class TeraboxEngine:
             from urllib.parse import urlparse
             page_parsed = urlparse(r.url)
             api_base = "{0}://{1}".format(page_parsed.scheme, page_parsed.netloc)
+            referer_url = r.url
             self.log_callback(logging.DEBUG, "API base: {0}".format(api_base))
             
+            decoded_html = ""
+            try:
+                from urllib.parse import unquote
+                decoded_html = unquote(html)
+            except Exception:
+                decoded_html = html
+            combined_html = html + "\n" + decoded_html
+
             # --- Extract jsToken (multiple methods) ---
-            js_token = ""
-            for pattern in [
+            js_token = self._extract_first(combined_html, [
                 r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
                 r'fn%28%22(.*?)%22%29',
                 r'"jsToken"\s*:\s*"([^"]+)"',
-            ]:
-                m = re.search(pattern, html)
-                if m:
-                    js_token = m.group(1)
-                    break
-            
-            # Also try URL-decoded version
-            if not js_token:
-                from urllib.parse import unquote
-                decoded_html = unquote(html)
-                m = re.search(r'fn\("([^"]+)"\)', decoded_html)
-                if m:
-                    js_token = m.group(1)
+                r'fn\("([^"]+)"\)',
+            ])
                 
             logid = self._find_between(html, 'dp-logid=', '&')
             
@@ -167,7 +251,7 @@ class TeraboxEngine:
             uk = ""
             
             # Primary: parse templateData JSON block (most reliable)
-            m_td = re.search(r'var\s+templateData\s*=\s*(\{.*?\});', html)
+            m_td = re.search(r'(?:var\s+)?templateData\s*=\s*(\{.*?\});', html)
             if m_td:
                 try:
                     td = json.loads(m_td.group(1))
@@ -176,25 +260,17 @@ class TeraboxEngine:
                 except Exception:
                     pass
             
-            # Fallback: regex for individual values
+            # Fallback: regex for individual values across JSON, JS objects and escaped blobs.
             if not bdstoken:
-                m_b = re.search(r'"bdstoken"\s*:\s*"([^"]+)"', html)
-                if m_b: bdstoken = m_b.group(1)
+                bdstoken = self._extract_share_field(combined_html, ['bdstoken'])
             if not uk:
-                m_u = re.search(r'"uk"\s*:\s*"(\d+)"', html)
-                if m_u: uk = m_u.group(1)
-            
-            # Try to find sign/timestamp from HTML (rare but possible)
-            for pat, var_name in [
-                (r'"sign"\s*:\s*"([^"]+)"', 'sign'),
-                (r'"timestamp"\s*:\s*(\d+)', 'timestamp'),
-                (r'"shareid"\s*:\s*"?(\d+)"?', 'shareid'),
-            ]:
-                m = re.search(pat, html)
-                if m:
-                    if var_name == 'sign': sign = m.group(1)
-                    elif var_name == 'timestamp': timestamp_val = m.group(1)
-                    elif var_name == 'shareid': shareid = m.group(1)
+                uk = self._extract_share_field(combined_html, ['uk', 'share_uk', 'shareUk'], numeric=True)
+            if not sign:
+                sign = self._extract_share_field(combined_html, ['sign'])
+            if not timestamp_val:
+                timestamp_val = self._extract_share_field(combined_html, ['timestamp', 'time'], numeric=True)
+            if not shareid:
+                shareid = self._extract_share_field(combined_html, ['shareid', 'share_id', 'shareId'], numeric=True)
             
             # --- Extract pcftoken ---
             pcftoken = ""
@@ -222,6 +298,43 @@ class TeraboxEngine:
             
             if not surl:
                 return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
+
+            # Some Terabox aliases redirect to a sparse www page that has list params
+            # but omits bdstoken, so refetch the original/alias sharing page for tokens.
+            if not bdstoken or not js_token:
+                original_host = urlparse(full_url).netloc
+                candidate_hosts = []
+                if original_host and original_host != page_parsed.netloc:
+                    candidate_hosts.append(original_host)
+                for host in ["dm.1024tera.com", "dm.terabox.app"]:
+                    if host not in candidate_hosts and host != page_parsed.netloc:
+                        candidate_hosts.append(host)
+                for host in candidate_hosts:
+                    try:
+                        alt_url = "{0}://{1}/sharing/link?surl={2}&clearCache=1".format(
+                            page_parsed.scheme or "https", host, surl)
+                        alt_r = session.get(alt_url, timeout=30)
+                        alt_html = alt_r.text
+                        alt_decoded = unquote(alt_html)
+                        alt_combined = alt_html + "\n" + alt_decoded
+                        alt_js_token = self._extract_first(alt_combined, [
+                            r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+                            r'fn%28%22(.*?)%22%29',
+                            r'"jsToken"\s*:\s*"([^"]+)"',
+                            r'fn\("([^"]+)"\)',
+                        ])
+                        alt_bdstoken = self._extract_share_field(alt_combined, ['bdstoken'])
+                        if alt_bdstoken and alt_js_token:
+                            bdstoken = alt_bdstoken
+                            js_token = alt_js_token
+                            pcftoken = self._extract_share_field(alt_combined, ['pcftoken']) or pcftoken
+                            alt_parsed = urlparse(alt_r.url)
+                            api_base = "{0}://{1}".format(alt_parsed.scheme, alt_parsed.netloc)
+                            referer_url = alt_r.url
+                            self.log_callback(logging.INFO, "Recovered tokens from {0}".format(host))
+                            break
+                    except Exception as e:
+                        self.log_callback(logging.DEBUG, "Token fallback {0}: {1}".format(host, str(e)))
                 
             if not js_token:
                 if "error/404" in r.url or "not found" in html.lower():
@@ -241,7 +354,7 @@ class TeraboxEngine:
                 "num": "20",
                 "by": "name",
                 "order": "asc",
-                "site_referer": r.url,
+                "site_referer": referer_url,
                 "shorturl": surl,
                 "root": "1",
             }
@@ -277,11 +390,15 @@ class TeraboxEngine:
             
             # *** KEY FIX: Extract shareid/uk from share/list response if not from HTML ***
             if not shareid:
-                shareid = str(data2.get("share_id", data2.get("shareid", "")))
+                shareid = self._pick_first(data2, ["share_id", "shareid", "shareId"])
             if not uk or uk == "0":
-                api_uk = str(data2.get("uk", ""))
+                api_uk = self._pick_first(data2, ["uk", "share_uk", "shareUk"])
                 if api_uk and api_uk != "0":
                     uk = api_uk
+            if not sign:
+                sign = self._pick_first(data2, ["sign"])
+            if not timestamp_val:
+                timestamp_val = self._pick_first(data2, ["timestamp", "server_time"])
             
             # *** COMPUTE SIGN if not found in HTML/API ***
             if not sign and bdstoken and js_token:
@@ -307,6 +424,12 @@ class TeraboxEngine:
             is_dir = str(file_info.get("isdir", "0"))
             dlink = file_info.get("dlink", "")
             fs_id = str(file_info.get("fs_id", ""))
+            self._emit_state(
+                file_name=file_name,
+                file_size=file_size,
+                file_size_human=self._human_size(file_size),
+                phase='info'
+            )
             
             if is_dir == "1":
                 return {"error": "Link này là thư mục (folder). Hiện tại chỉ hỗ trợ tải 1 file."}
@@ -339,12 +462,20 @@ class TeraboxEngine:
                     # Try with actual page domain first
                     r3 = session.get("{0}/share/download".format(api_base), params=dl_params, timeout=30)
                     data3 = r3.json()
-                    self.log_callback(logging.DEBUG, "share/download errno: {0}".format(data3.get('errno')))
+                    self.log_callback(logging.DEBUG, "share/download GET errno: {0}".format(data3.get('errno')))
                     if data3.get("errno") == 0:
                         dlink = data3.get("dlink", "")
                         if not dlink and data3.get("list"):
                             dlink = data3["list"][0].get("dlink", "")
-                    elif api_base != "https://www.terabox.app":
+                    if not dlink:
+                        r3p = session.post("{0}/share/download".format(api_base), data=dl_params, timeout=30)
+                        data3p = r3p.json()
+                        self.log_callback(logging.DEBUG, "share/download POST errno: {0}".format(data3p.get('errno')))
+                        if data3p.get("errno") == 0:
+                            dlink = data3p.get("dlink", "")
+                            if not dlink and data3p.get("list"):
+                                dlink = data3p["list"][0].get("dlink", "")
+                    if not dlink and api_base != "https://www.terabox.app":
                         # Fallback to www.terabox.app
                         r3 = session.get("https://www.terabox.app/share/download", params=dl_params, timeout=30)
                         data3 = r3.json()
@@ -352,8 +483,26 @@ class TeraboxEngine:
                             dlink = data3.get("dlink", "")
                             if not dlink and data3.get("list"):
                                 dlink = data3["list"][0].get("dlink", "")
+                        if not dlink:
+                            r3p = session.post("https://www.terabox.app/share/download", data=dl_params, timeout=30)
+                            data3p = r3p.json()
+                            if data3p.get("errno") == 0:
+                                dlink = data3p.get("dlink", "")
+                                if not dlink and data3p.get("list"):
+                                    dlink = data3p["list"][0].get("dlink", "")
                 except Exception as e:
                     self.log_callback(logging.WARNING, "share/download: {0}".format(str(e)))
+            elif not dlink:
+                missing = [
+                    name for name, value in [
+                        ("fs_id", fs_id),
+                        ("sign", sign),
+                        ("timestamp", timestamp_val),
+                        ("shareid", shareid),
+                        ("uk", uk),
+                    ] if not value
+                ]
+                self.log_callback(logging.WARNING, "Thiếu thông tin Terabox để gọi share/download: {0}".format(", ".join(missing)))
             
             # 4. Try yt-dlp CLI if available (handles sign computation internally)
             if not dlink:
@@ -366,7 +515,7 @@ class TeraboxEngine:
                         'yt-dlp',
                         '-g',  # get url only
                         '--no-warnings',
-                        '--add-header', f'Cookie: {cookie_header_val}',
+                        '--add-header', 'Cookie: {0}'.format(cookie_header_val),
                         '--add-header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
                         full_url
                     ]
@@ -381,7 +530,7 @@ class TeraboxEngine:
                             self.log_callback(logging.INFO, "yt-dlp: lấy link thành công!")
                     else:
                         err_msg = err.strip() if err else "Unknown error"
-                        self.log_callback(logging.WARNING, f"yt-dlp thất bại: {err_msg}")
+                        self.log_callback(logging.WARNING, "yt-dlp thất bại: {0}".format(err_msg))
                         
                 except Exception as e:
                     self.log_callback(logging.WARNING, "Lỗi chạy yt-dlp: {0}".format(str(e)))
@@ -424,6 +573,19 @@ class TeraboxEngine:
                 "file_size": file_size,
                 "file_size_human": self._human_size(file_size),
                 "download_url": dlink,
+                "download_url_ready": bool(dlink),
+                "fs_id": fs_id,
+                "shareid": shareid,
+                "uk": uk,
+                "missing_fields": [
+                    name for name, value in [
+                        ("shareid", shareid),
+                        ("uk", uk),
+                        ("sign", sign),
+                        ("timestamp", timestamp_val),
+                        ("fs_id", fs_id),
+                    ] if not value
+                ],
             }
             
             if not dlink:
@@ -445,25 +607,19 @@ class TeraboxEngine:
         
         Returns: path to downloaded file, or None on failure.
         """
+        self._download_error = ''
         if requests is None:
             self.log_callback(logging.ERROR, "Module 'requests' not installed.")
+            self._download_error = 'fatal'
             return None
-
-        # Check disk space
-        try:
-            disk = shutil.disk_usage(os.path.dirname(tmp_dir) or '/tmp')
-            if file_size > 0 and disk.free < file_size * 1.1:  # 10% margin
-                self.log_callback(logging.ERROR,
-                                  "Không đủ dung lượng ổ cứng! Cần {0}, còn trống {1}".format(
-                                      self._human_size(file_size), self._human_size(disk.free)))
-                return None
-        except Exception:
-            pass  # If disk check fails, try anyway
 
         os.makedirs(tmp_dir, exist_ok=True)
         # Sanitize filename
         safe_name = re.sub(r'[\\/*?:"<>|]', '_', file_name)
         file_path = os.path.join(tmp_dir, safe_name)
+        part_path = file_path + '.part'
+        file_path_for_io = self._path_for_io(file_path)
+        part_path_for_io = self._path_for_io(part_path)
 
         cookie_header = self._build_cookie_header(cookie)
         headers = {
@@ -473,26 +629,79 @@ class TeraboxEngine:
         }
 
         try:
+            if os.path.exists(file_path_for_io):
+                existing_size = os.path.getsize(file_path_for_io)
+                if file_size > 0 and existing_size == file_size:
+                    self.log_callback(logging.INFO, "File đã tải đủ từ lần trước, chuyển sang upload.")
+                    return file_path_for_io
+
+            resume_from = 0
+            if os.path.exists(part_path_for_io):
+                resume_from = os.path.getsize(part_path_for_io)
+                if file_size > 0 and resume_from > file_size:
+                    self.log_callback(logging.ERROR, "File .part lớn hơn metadata, không resume để tránh hỏng file.")
+                    self._download_error = 'fatal'
+                    return None
+                if file_size > 0 and resume_from == file_size:
+                    os.rename(part_path_for_io, file_path_for_io)
+                    self.log_callback(logging.INFO, "File .part đã đủ size, đổi tên thành file hoàn chỉnh.")
+                    return file_path_for_io
+
+            # Check disk space for the remaining bytes, not a second full copy.
+            try:
+                disk = shutil.disk_usage(os.path.dirname(tmp_dir) or '/tmp')
+                remaining_size = max((file_size or 0) - resume_from, 0)
+                if remaining_size > 0 and disk.free < remaining_size * 1.1:
+                    self.log_callback(logging.ERROR,
+                                      "Không đủ dung lượng ổ cứng! Cần thêm {0}, còn trống {1}".format(
+                                          self._human_size(remaining_size), self._human_size(disk.free)))
+                    self._download_error = 'fatal'
+                    return None
+            except Exception:
+                pass  # If disk check fails, try anyway
+
             self.log_callback(logging.INFO,
                               "Bắt đầu tải: {0} ({1})".format(safe_name, self._human_size(file_size)))
+            if resume_from > 0:
+                headers["Range"] = "bytes={0}-".format(resume_from)
+                self.log_callback(logging.INFO, "Resume từ {0}".format(self._human_size(resume_from)))
 
             self._response = requests.get(download_url, headers=headers, stream=True, timeout=60)
-            self._response.raise_for_status()
+            status_code = self._response.status_code
+            if resume_from > 0:
+                if status_code != 206:
+                    self.log_callback(logging.ERROR,
+                                      "Server không chấp nhận resume: HTTP {0}. Không append để tránh hỏng file.".format(status_code))
+                    self._download_error = 'retryable' if status_code in (401, 403, 404, 416, 429, 500, 502, 503, 504) else 'fatal'
+                    return None
+                content_range = self._response.headers.get('Content-Range', '')
+                if not self._validate_content_range(content_range, resume_from, file_size):
+                    self.log_callback(logging.ERROR,
+                                      "Content-Range không khớp ({0}). Không append để tránh hỏng file.".format(content_range))
+                    self._download_error = 'fatal'
+                    return None
+            else:
+                if status_code != 200:
+                    self.log_callback(logging.ERROR, "HTTP tải file lỗi: {0}".format(status_code))
+                    self._download_error = 'retryable' if status_code in (401, 403, 404, 416, 429, 500, 502, 503, 504) else 'fatal'
+                    return None
 
             # Get actual file size from Content-Length if available
             content_length = int(self._response.headers.get('Content-Length', file_size) or file_size)
-            if content_length > 0:
+            if content_length > 0 and resume_from == 0:
                 file_size = content_length
 
-            downloaded = 0
+            downloaded = resume_from
             last_progress_time = time.time()
-            last_downloaded = 0
+            last_downloaded = resume_from
+            mode = 'ab' if resume_from > 0 else 'wb'
 
-            with open(file_path, 'wb') as f:
+            with open(part_path_for_io, mode) as f:
                 for chunk in self._response.iter_content(chunk_size=self.CHUNK_SIZE):
                     if self.stop_checker() or self._stopped:
-                        self.log_callback(logging.WARNING, "Tải bị dừng bởi người dùng.")
+                        self.log_callback(logging.WARNING, "Tải bị tạm dừng. File .part được giữ để resume.")
                         self._response.close()
+                        self._download_error = 'stopped'
                         return None
 
                     if chunk:
@@ -529,21 +738,34 @@ class TeraboxEngine:
                             last_progress_time = now
                             last_downloaded = downloaded
 
+            actual_size = os.path.getsize(part_path_for_io)
+            if file_size > 0 and actual_size != file_size:
+                self.log_callback(logging.WARNING,
+                                  "Download chưa đủ size ({0}/{1}), giữ file .part để resume.".format(
+                                      self._human_size(actual_size), self._human_size(file_size)))
+                self._download_error = 'retryable'
+                return None
+
+            os.rename(part_path_for_io, file_path_for_io)
             self.log_callback(logging.INFO,
-                              "Tải xong: {0} ({1})".format(safe_name, self._human_size(downloaded)))
-            return file_path
+                              "Tải xong: {0} ({1})".format(safe_name, self._human_size(actual_size)))
+            return file_path_for_io
 
         except requests.exceptions.Timeout:
-            self.log_callback(logging.ERROR, "Kết nối tới Terabox bị timeout khi tải.")
+            self.log_callback(logging.WARNING, "Kết nối tới Terabox bị timeout. Giữ file .part để resume.")
+            self._download_error = 'retryable'
             return None
         except requests.exceptions.ConnectionError:
-            self.log_callback(logging.ERROR, "Mất kết nối khi đang tải từ Terabox.")
+            self.log_callback(logging.WARNING, "Mất kết nối khi đang tải từ Terabox. Giữ file .part để resume.")
+            self._download_error = 'retryable'
             return None
         except IOError as e:
             self.log_callback(logging.ERROR, "Lỗi ghi file: {0}".format(str(e)))
+            self._download_error = 'fatal'
             return None
         except Exception as e:
             self.log_callback(logging.ERROR, "Lỗi tải file: {0}".format(str(e)))
+            self._download_error = 'retryable'
             return None
 
     # ==================== UPLOAD TO GOOGLE DRIVE ====================
@@ -650,12 +872,15 @@ class TeraboxEngine:
         Returns: True on success, False on failure.
         """
         self._stopped = False
-        tmp_dir = os.path.join('/tmp', 'terabox_dl', str(uuid.uuid4()))
+        tmp_dir = self._resume_dir_for_url(url)
+        max_attempts = 4
+        local_path = None
 
         try:
             # Phase 1: Get file info
             self.log_callback(logging.INFO, "=" * 50)
             self.log_callback(logging.INFO, "BƯỚC 1/3: Lấy thông tin file...")
+            self._emit_state(status='fetching_info', phase='info')
             self.progress_callback(0, "Đang lấy thông tin file...")
 
             info = self.get_file_info(url, cookie)
@@ -666,6 +891,12 @@ class TeraboxEngine:
             file_name = info["file_name"]
             file_size = info["file_size"]
             download_url = info.get("download_url", "")
+            self._emit_state(
+                file_name=file_name,
+                file_size=file_size,
+                file_size_human=info["file_size_human"],
+                phase='info'
+            )
 
             self.log_callback(logging.INFO,
                               "File: {0} ({1})".format(file_name, info["file_size_human"]))
@@ -678,12 +909,42 @@ class TeraboxEngine:
             if self.stop_checker() or self._stopped:
                 return False
 
+            self._write_resume_meta(tmp_dir, {
+                'url': url,
+                'drive_dest': drive_dest,
+                'file_name': file_name,
+                'file_size': file_size,
+                'updated_at': int(time.time()),
+            })
+
             # Phase 2: Download to VPS
             self.log_callback(logging.INFO, "=" * 50)
             self.log_callback(logging.INFO, "BƯỚC 2/3: Tải file về VPS...")
+            self._emit_state(status='downloading', phase='download')
             self.progress_callback(2, "Bắt đầu tải từ Terabox...")
 
-            local_path = self.download_to_vps(download_url, cookie, tmp_dir, file_name, file_size)
+            for attempt in range(max_attempts):
+                local_path = self.download_to_vps(download_url, cookie, tmp_dir, file_name, file_size)
+                if local_path:
+                    break
+                if self.stop_checker() or self._stopped or self._download_error == 'stopped':
+                    return False
+                if self._download_error != 'retryable':
+                    return False
+
+                self.log_callback(logging.WARNING,
+                                  "Link tải lỗi/hết hạn. Đang lấy link mới để resume (lần {0}/{1})...".format(
+                                      attempt + 1, max_attempts - 1))
+                self._emit_state(status='fetching_info', phase='info')
+                info = self.get_file_info(url, cookie)
+                if "error" in info or not info.get("download_url"):
+                    self._emit_state(status='paused', phase='download')
+                    self.log_callback(logging.ERROR,
+                                      "Không lấy được link mới. Cập nhật cookie ndus rồi bấm Bắt đầu tải lại để resume.")
+                    return False
+                download_url = info["download_url"]
+                self._emit_state(status='downloading', phase='download')
+
             if not local_path:
                 return False
 
@@ -693,23 +954,23 @@ class TeraboxEngine:
             # Phase 3: Upload to Google Drive
             self.log_callback(logging.INFO, "=" * 50)
             self.log_callback(logging.INFO, "BƯỚC 3/3: Đẩy file lên Google Drive...")
+            self._emit_state(status='uploading', phase='upload')
             self.progress_callback(50, "Bắt đầu upload lên Google Drive...")
 
             success = self.upload_to_drive(local_path, drive_dest)
 
             if success:
+                self._emit_state(status='done', phase='done')
                 self.progress_callback(100, "Hoàn tất!")
                 self.log_callback(logging.INFO, "=" * 50)
                 self.log_callback(logging.INFO,
                                   "HOÀN TẤT! File '{0}' đã được copy lên Google Drive.".format(file_name))
+                self.cleanup(tmp_dir)
             return success
 
         except Exception as e:
             self.log_callback(logging.ERROR, "Pipeline error: {0}".format(str(e)))
             return False
-        finally:
-            # Always cleanup
-            self.cleanup(tmp_dir)
 
     # ==================== STOP ====================
 

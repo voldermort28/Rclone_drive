@@ -1203,6 +1203,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     var tbCheckBtn = document.getElementById('teraboxCheckBtn');
     var tbStartBtn = document.getElementById('teraboxStartBtn');
     var tbStopBtn = document.getElementById('teraboxStopBtn');
+    var tbResetBtn = document.getElementById('teraboxResetBtn');
+    var tbClearTempBtn = document.getElementById('teraboxClearTempBtn');
     var tbFileInfo = document.getElementById('teraboxFileInfo');
     var tbFileName = document.getElementById('teraboxFileName');
     var tbFileSize = document.getElementById('teraboxFileSize');
@@ -1219,6 +1221,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     var tbPollingInterval = null;
     var tbLastLogCount = 0;
+    var tbRenderedLogKey = '';
 
     // Restore from localStorage
     var savedTbLink = localStorage.getItem('tb_link');
@@ -1300,7 +1303,14 @@ window.addEventListener('DOMContentLoaded', async () => {
             .then(function (data) {
                 if (data.success) {
                     tbFileName.textContent = data.file_name;
-                    tbFileSize.textContent = data.file_size_human;
+                    var detail = data.file_size_human || '';
+                    if (data.download_url_ready === false) {
+                        detail += ' · đã lấy metadata, link tải sẽ thử lại khi bắt đầu';
+                    }
+                    if (data.missing_fields && data.missing_fields.length > 0) {
+                        detail += ' · thiếu: ' + data.missing_fields.join(', ');
+                    }
+                    tbFileSize.textContent = detail;
                     tbFileInfo.style.display = 'block';
                 } else {
                     alert('Lỗi: ' + (data.error || 'Không lấy được thông tin file'));
@@ -1376,10 +1386,56 @@ window.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    function tbPollStatus() {
-        fetch('/api/terabox/status')
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
+    function tbRenderLogs(logs, replace) {
+        if (!logs || logs.length === 0) {
+            if (replace) {
+                tbConsole.textContent = 'Đang chờ console...';
+                tbLastLogCount = 0;
+                tbRenderedLogKey = '';
+            }
+            return;
+        }
+
+        var start = replace ? 0 : tbLastLogCount;
+        var newLogs = logs.slice(start);
+        if (replace) {
+            tbConsole.innerHTML = '';
+        } else if (newLogs.length === 0) {
+            var lastLog = logs[logs.length - 1];
+            var currentKey = logs.length + '|' + (lastLog.time || '') + '|' + (lastLog.msg || '');
+            if (currentKey !== tbRenderedLogKey && logs.length <= tbLastLogCount) {
+                newLogs = logs;
+                tbConsole.innerHTML = '';
+            }
+        }
+
+        if (newLogs.length === 0) return;
+
+        var html = '';
+        for (var i = newLogs.length - 1; i >= 0; i--) {
+            var log = newLogs[i];
+            var color = '#a5b4fc'; // default
+            if (log.level === 'ERROR') color = '#ef4444';
+            else if (log.level === 'WARNING') color = '#f59e0b';
+            else if (log.level === 'INFO') color = '#38bdf8';
+            else if (log.level === 'DEBUG') color = '#64748b';
+
+            var safeMsg = String(log.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<span style="color:' + color + '">[' + log.time + '] ' + safeMsg + '</span>\n';
+        }
+
+        if (replace) {
+            tbConsole.innerHTML = html;
+        } else {
+            tbConsole.innerHTML = html + tbConsole.innerHTML;
+        }
+        tbLastLogCount = logs.length;
+        var last = logs[logs.length - 1];
+        tbRenderedLogKey = logs.length + '|' + (last.time || '') + '|' + (last.msg || '');
+        tbConsole.scrollTop = 0;
+    }
+
+    function tbUpdateStatusUI(data, replaceLogs) {
                 // Update progress bar
                 var pct = data.progress || 0;
                 tbProgressBar.style.width = pct + '%';
@@ -1394,36 +1450,23 @@ window.addEventListener('DOMContentLoaded', async () => {
 
                 // Update status text
                 tbStatusText.textContent = data.message || 'Đang xử lý...';
-                tbProgressDetail.textContent = data.file_size_human || '';
+                var progressDetail = '';
+                if (data.file_name) progressDetail += data.file_name;
+                if (data.file_size_human) {
+                    progressDetail += (progressDetail ? ' · ' : '') + data.file_size_human;
+                }
+                tbProgressDetail.textContent = progressDetail;
 
                 // Phase indicator
-                if (data.status === 'downloading' || pct <= 50) {
+                if (data.phase === 'info' || data.status === 'fetching_info') {
+                    tbPhaseText.textContent = '🔎 Đang lấy thông tin Terabox';
+                } else if (data.phase === 'download' || data.status === 'downloading') {
                     tbPhaseText.textContent = '📥 Đang tải từ Terabox';
-                } else if (data.status === 'uploading' || pct > 50) {
+                } else if (data.phase === 'upload' || data.status === 'uploading') {
                     tbPhaseText.textContent = '📤 Đang đẩy lên Google Drive';
                 }
 
-                // Render console logs
-                if (data.logs && data.logs.length > 0) {
-                    var newLogs = data.logs.slice(tbLastLogCount);
-                    if (newLogs.length > 0) {
-                        var html = '';
-                        for (var i = 0; i < newLogs.length; i++) {
-                            var log = newLogs[i];
-                            var color = '#a5b4fc'; // default
-                            if (log.level === 'ERROR') color = '#ef4444';
-                            else if (log.level === 'WARNING') color = '#f59e0b';
-                            else if (log.level === 'INFO') color = '#38bdf8';
-                            else if (log.level === 'DEBUG') color = '#64748b';
-
-                            html += '<span style="color:' + color + '">[' + log.time + '] ' + log.msg + '</span>\n';
-                        }
-                        tbConsole.innerHTML += html;
-                        tbLastLogCount = data.logs.length;
-                        // Auto-scroll
-                        tbConsole.scrollTop = tbConsole.scrollHeight;
-                    }
-                }
+                tbRenderLogs(data.logs || [], replaceLogs);
 
                 // Terminal states
                 if (data.status === 'done') {
@@ -1431,6 +1474,7 @@ window.addEventListener('DOMContentLoaded', async () => {
                     tbStatusText.textContent = '✅ ' + (data.message || 'Hoàn tất!');
                     tbStatusText.style.color = '#22c55e';
                     tbPhaseText.textContent = '🎉 Xong!';
+                    tbStopBtn.style.display = 'none';
                     tbStartBtn.disabled = false;
                     tbStartBtn.textContent = '🚀 Bắt đầu tải';
                 } else if (data.status === 'error') {
@@ -1438,19 +1482,62 @@ window.addEventListener('DOMContentLoaded', async () => {
                     tbStatusText.textContent = '❌ ' + (data.message || 'Lỗi!');
                     tbStatusText.style.color = '#ef4444';
                     tbPhaseText.textContent = '⚠️ Thất bại';
+                    tbStopBtn.style.display = 'none';
                     tbStartBtn.disabled = false;
-                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                    tbStartBtn.textContent = '▶️ Resume tải';
                 } else if (data.status === 'stopped') {
                     tbStopPolling();
                     tbStatusText.textContent = '⏹ ' + (data.message || 'Đã dừng.');
                     tbStatusText.style.color = '#f59e0b';
+                    tbPhaseText.textContent = '⏸ Đã tạm dừng, có thể resume';
+                    tbStopBtn.style.display = 'none';
                     tbStartBtn.disabled = false;
-                    tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                    tbStartBtn.textContent = '▶️ Resume tải';
+                } else if (data.status === 'paused') {
+                    tbStopPolling();
+                    tbStatusText.textContent = '⏸ ' + (data.message || 'Đang tạm dừng, có thể resume.');
+                    tbStatusText.style.color = '#f59e0b';
+                    tbPhaseText.textContent = '⏸ Chờ resume';
+                    tbStopBtn.style.display = 'none';
+                    tbStartBtn.disabled = false;
+                    tbStartBtn.textContent = '▶️ Resume tải';
+                } else if (data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading') {
+                    tbStartBtn.disabled = true;
+                    tbStartBtn.textContent = '⏳ Đang chạy...';
+                    tbStatusSection.style.display = 'block';
+                    tbStatusText.style.color = '#3b82f6';
+                    tbStopBtn.style.display = 'block';
                 }
+    }
+
+    function tbPollStatus() {
+        fetch('/api/terabox/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                tbUpdateStatusUI(data, false);
             })
             .catch(function () {
                 // Silently ignore polling errors
             });
+    }
+
+    function tbRestoreStatus() {
+        fetch('/api/terabox/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var hasLogs = data.logs && data.logs.length > 0;
+                var active = data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading';
+                var terminal = data.status === 'done' || data.status === 'error' || data.status === 'stopped' || data.status === 'paused';
+                if (!hasLogs && !active && !terminal) return;
+
+                tbStatusSection.style.display = 'block';
+                tbUpdateStatusUI(data, true);
+
+                if (active) {
+                    tbStartPolling();
+                }
+            })
+            .catch(function () { });
     }
 
     // ---- Stop ----
@@ -1466,12 +1553,53 @@ window.addEventListener('DOMContentLoaded', async () => {
             .catch(function (e) { alert('Lỗi: ' + e); });
     }
 
+    function tbReset(deleteFiles) {
+        var confirmMsg = deleteFiles
+            ? 'Xóa toàn bộ file tạm Terabox (.part) và trạng thái hiện tại? Sau đó sẽ tải lại từ đầu.'
+            : 'Xóa trạng thái/log Terabox đang hiển thị? File .part để resume sẽ được giữ lại.';
+        if (!confirm(confirmMsg)) return;
+
+        fetch('/api/terabox/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delete_files: !!deleteFiles })
+        })
+            .then(function (r) {
+                return r.json().then(function (data) {
+                    if (!r.ok) throw new Error(data.error || 'Reset thất bại');
+                    return data;
+                });
+            })
+            .then(function () {
+                tbStopPolling();
+                tbStatusSection.style.display = 'none';
+                tbStatusText.textContent = 'Đang xử lý...';
+                tbPhaseText.textContent = '';
+                tbProgressBar.style.width = '0%';
+                tbProgressPercent.textContent = '0%';
+                tbProgressDetail.textContent = '';
+                tbConsole.textContent = 'Đang chờ...';
+                tbLastLogCount = 0;
+                tbRenderedLogKey = '';
+                tbStartBtn.disabled = false;
+                tbStartBtn.textContent = '🚀 Bắt đầu tải';
+                tbStopBtn.style.display = 'none';
+                alert(deleteFiles ? 'Đã xóa trạng thái và file tạm.' : 'Đã xóa trạng thái.');
+            })
+            .catch(function (e) {
+                alert('Lỗi: ' + e.message);
+            });
+    }
+
     // ---- Event Listeners ----
     tbSaveCookieBtn.addEventListener('click', tbSaveCookie);
     tbCheckBtn.addEventListener('click', tbCheckInfo);
     tbStartBtn.addEventListener('click', tbStart);
     tbStopBtn.addEventListener('click', tbStop);
+    if (tbResetBtn) tbResetBtn.addEventListener('click', function () { tbReset(false); });
+    if (tbClearTempBtn) tbClearTempBtn.addEventListener('click', function () { tbReset(true); });
 
     // Load cookie status on page load
     tbLoadCookie();
+    tbRestoreStatus();
 })();

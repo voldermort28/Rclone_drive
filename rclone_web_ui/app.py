@@ -727,6 +727,7 @@ def handle_500(e):
 from terabox_engine import TeraboxEngine
 
 TERABOX_COOKIE_FILE = os.path.join(BASE_DIR, 'terabox_cookie.txt')
+TERABOX_TMP_ROOT = '/tmp/terabox_dl'
 
 terabox_state = {
     'status': 'idle',
@@ -742,9 +743,29 @@ terabox_state = {
 _terabox_engine = None
 
 
+def _reset_terabox_state():
+    terabox_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False
+    })
+
+
 def _terabox_progress(percent, message):
     terabox_state['progress'] = percent
     terabox_state['message'] = message
+
+
+def _terabox_state_update(values):
+    for key, value in values.items():
+        if key in terabox_state:
+            terabox_state[key] = value
 
 
 def _terabox_log(level, message):
@@ -807,7 +828,7 @@ def terabox_info():
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie trống. Vui lòng cập nhật cookie.'})
 
-    engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker)
+    engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
     info = engine.get_file_info(url, cookie)
 
     if 'error' in info:
@@ -818,6 +839,8 @@ def terabox_info():
         'file_name': info['file_name'],
         'file_size': info['file_size'],
         'file_size_human': info['file_size_human'],
+        'download_url_ready': info.get('download_url_ready', False),
+        'missing_fields': info.get('missing_fields', []),
     })
 
 
@@ -854,7 +877,7 @@ def terabox_start():
 
     # Reset state
     terabox_state.update({
-        'status': 'downloading',
+        'status': 'fetching_info',
         'progress': 0,
         'message': 'Khởi tạo...',
         'file_name': '',
@@ -865,7 +888,7 @@ def terabox_start():
         'stop_flag': False
     })
 
-    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker)
+    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
 
     def _run_pipeline():
         try:
@@ -875,14 +898,20 @@ def terabox_start():
                 terabox_state['message'] = 'Đã dừng bởi người dùng.'
             elif success:
                 terabox_state['status'] = 'done'
+                terabox_state['phase'] = 'done'
                 terabox_state['message'] = 'Hoàn tất! File đã được copy lên Google Drive.'
                 terabox_state['progress'] = 100
+            elif terabox_state.get('status') == 'paused':
+                if not terabox_state['message']:
+                    terabox_state['message'] = 'Đang tạm dừng. Cập nhật cookie rồi bấm Bắt đầu tải để resume.'
             else:
                 terabox_state['status'] = 'error'
+                terabox_state['phase'] = 'error'
                 if not terabox_state['message']:
                     terabox_state['message'] = 'Tải thất bại. Xem console để biết chi tiết.'
         except Exception as e:
             terabox_state['status'] = 'error'
+            terabox_state['phase'] = 'error'
             terabox_state['message'] = 'Lỗi: {0}'.format(str(e))
 
     t = threading.Thread(target=_run_pipeline, daemon=True)
@@ -898,6 +927,7 @@ def terabox_status():
         'progress': terabox_state['progress'],
         'message': terabox_state['message'],
         'file_name': terabox_state['file_name'],
+        'file_size': terabox_state['file_size'],
         'file_size_human': terabox_state['file_size_human'],
         'phase': terabox_state['phase'],
         'logs': terabox_state['logs'][-50:],
@@ -913,6 +943,39 @@ def terabox_stop():
     terabox_state['status'] = 'stopped'
     terabox_state['message'] = 'Đã dừng bởi người dùng.'
     return jsonify({'success': True})
+
+
+@app.route('/api/terabox/reset', methods=['POST'])
+def terabox_reset():
+    global _terabox_engine
+    data = request.get_json(force=True, silent=True) or {}
+    delete_files = bool(data.get('delete_files', False))
+    active = terabox_state.get('status') in ('fetching_info', 'downloading', 'uploading')
+
+    if active:
+        return jsonify({
+            'success': False,
+            'error': 'Terabox đang chạy. Hãy bấm Dừng trước khi reset.'
+        }), 400
+
+    deleted = False
+    if delete_files and os.path.exists(TERABOX_TMP_ROOT):
+        try:
+            shutil.rmtree(TERABOX_TMP_ROOT, ignore_errors=True)
+            deleted = True
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if _terabox_engine:
+        _terabox_engine.stop()
+    _terabox_engine = None
+    _reset_terabox_state()
+
+    return jsonify({
+        'success': True,
+        'message': 'Đã reset trạng thái Terabox',
+        'deleted_files': deleted
+    })
 
 
 if __name__ == '__main__':
