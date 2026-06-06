@@ -109,9 +109,11 @@ def get_folder_name_via_rclone(gc_path):
     try:
         import subprocess
         rclone_bin = '/usr/bin/gclone'
+        cmd = [rclone_bin, 'lsf', '--dirs-only', '-d', gc_path]
+        cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
         # lsf -d shows the folder name itself
         result = subprocess.run(
-            [rclone_bin, 'lsf', '--dirs-only', '-d', gc_path],
+            cmd_bytes,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15
         )
         name = result.stdout.decode('utf-8', errors='replace').strip().rstrip('/')
@@ -643,8 +645,10 @@ def _resolve_folder_name(gc_path):
         m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', gc_path)
         if m:
             prepared = f"{m.group(1)}:{{{m.group(2)}}}{m.group(3) or ''}"
+        cmd = [rclone_bin, 'lsf', '--dirs-only', '-d', prepared]
+        cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
         result = subprocess.run(
-            [rclone_bin, 'lsf', '--dirs-only', '-d', prepared],
+            cmd_bytes,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10
         )
         name = result.stdout.decode('utf-8', errors='replace').strip().rstrip('/')
@@ -728,6 +732,9 @@ from terabox_engine import TeraboxEngine
 
 TERABOX_COOKIE_FILE = os.path.join(BASE_DIR, 'terabox_cookie.txt')
 TERABOX_TMP_ROOT = '/tmp/terabox_dl'
+FSHARE_CONFIG_FILE = os.path.join(BASE_DIR, 'fshare_config.json')
+FSHARE_TMP_ROOT = '/tmp/fshare_dl'
+MEDIAFIRE_TMP_ROOT = '/tmp/mediafire_dl'
 
 terabox_state = {
     'status': 'idle',
@@ -976,6 +983,450 @@ def terabox_reset():
         'message': 'Đã reset trạng thái Terabox',
         'deleted_files': deleted
     })
+
+
+# ==================== FSHARE MODULE (Completely Isolated) ====================
+from fshare_engine import FshareEngine
+
+fshare_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False
+}
+_fshare_engine = None
+
+
+def _mask_secret(value):
+    value = (value or '').strip()
+    if not value:
+        return ''
+    if len(value) <= 8:
+        return '***'
+    return value[:4] + '...' + value[-4:]
+
+
+def _load_fshare_config(include_secret=True):
+    config = {
+        'email': os.environ.get('FSHARE_USER_EMAIL', ''),
+        'password': os.environ.get('FSHARE_PASSWORD', ''),
+        'app_key': os.environ.get('FSHARE_APP_KEY', ''),
+        'user_agent': os.environ.get('FSHARE_USER_AGENT', ''),
+    }
+    if os.path.exists(FSHARE_CONFIG_FILE):
+        try:
+            with open(FSHARE_CONFIG_FILE, 'r') as f:
+                saved = json.load(f)
+            for key in config:
+                if saved.get(key):
+                    config[key] = saved.get(key)
+        except Exception:
+            pass
+    if not include_secret:
+        return {
+            'email': config.get('email', ''),
+            'has_password': bool(config.get('password')),
+            'password_masked': _mask_secret(config.get('password', '')),
+            'complete': all(config.get(k) for k in ['email', 'password'])
+        }
+    return config
+
+
+def _save_fshare_config(data):
+    current = _load_fshare_config(include_secret=True)
+    for key in ['email', 'password']:
+        if key in data:
+            val = (data.get(key) or '').strip()
+            if key == 'password' and val == '__KEEP__':
+                continue
+            current[key] = val
+    with open(FSHARE_CONFIG_FILE, 'w') as f:
+        json.dump(current, f)
+    return current
+
+
+def _reset_fshare_state():
+    fshare_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False
+    })
+
+
+def _fshare_progress(percent, message):
+    fshare_state['progress'] = percent
+    fshare_state['message'] = message
+
+
+def _fshare_state_update(values):
+    for key, value in values.items():
+        if key in fshare_state:
+            fshare_state[key] = value
+
+
+def _fshare_log(level, message):
+    fshare_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(fshare_state['logs']) > 200:
+        fshare_state['logs'] = fshare_state['logs'][-200:]
+    logging.log(level, "[FSHARE] %s", message)
+
+
+def _fshare_stop_checker():
+    return fshare_state.get('stop_flag', False)
+
+
+@app.route('/api/fshare/config', methods=['GET', 'POST'])
+def fshare_config():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            config = _save_fshare_config(data)
+            complete = all(config.get(k) for k in ['email', 'password'])
+            return jsonify({'success': True, 'complete': complete, 'message': 'Đã lưu cấu hình Fshare'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify(_load_fshare_config(include_secret=False))
+
+
+@app.route('/api/fshare/info', methods=['POST'])
+def fshare_info():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    file_password = data.get('file_password', '').strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Fshare'})
+
+    engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
+    info = engine.get_file_info(url, _load_fshare_config(include_secret=True), file_password)
+    if 'error' in info:
+        return jsonify({'success': False, 'error': info['error']})
+    return jsonify(info)
+
+
+@app.route('/api/fshare/start', methods=['POST'])
+def fshare_start():
+    global _fshare_engine
+
+    if fshare_state['status'] in ('fetching_info', 'downloading', 'uploading'):
+        return jsonify({'success': False, 'error': 'Đang có tiến trình Fshare chạy. Vui lòng đợi hoặc dừng trước.'})
+
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    dest = data.get('destination', '').strip()
+    file_password = data.get('file_password', '').strip()
+
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Fshare'})
+    if not dest:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
+
+    config = _load_fshare_config(include_secret=True)
+    missing = [k for k in ['email', 'password'] if not config.get(k)]
+    if missing:
+        return jsonify({'success': False, 'error': 'Chưa cấu hình Fshare: ' + ', '.join(missing)})
+
+    dest_converted = dest
+    if 'drive.google.com' in dest:
+        fid = extract_drive_id(dest)
+        if fid:
+            dest_converted = 'gc:' + fid
+
+    fshare_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Fshare...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False
+    })
+
+    _fshare_engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
+
+    def _run_pipeline():
+        try:
+            success = _fshare_engine.run_full_pipeline(url, config, dest_converted, file_password)
+            if _fshare_stop_checker():
+                fshare_state['status'] = 'stopped'
+                fshare_state['message'] = 'Đã dừng bởi người dùng.'
+            elif success:
+                fshare_state['status'] = 'done'
+                fshare_state['phase'] = 'done'
+                fshare_state['message'] = 'Hoàn tất! File Fshare đã được copy lên Google Drive.'
+                fshare_state['progress'] = 100
+            else:
+                fshare_state['status'] = 'error'
+                fshare_state['phase'] = 'error'
+                if not fshare_state['message']:
+                    fshare_state['message'] = 'Tải Fshare thất bại. Xem console để biết chi tiết.'
+        except Exception as e:
+            fshare_state['status'] = 'error'
+            fshare_state['phase'] = 'error'
+            fshare_state['message'] = 'Lỗi: {0}'.format(str(e))
+
+    t = threading.Thread(target=_run_pipeline, daemon=True)
+    t.start()
+    return jsonify({'success': True, 'message': 'Đã bắt đầu tải Fshare'})
+
+
+@app.route('/api/fshare/status', methods=['GET'])
+def fshare_status():
+    return jsonify({
+        'status': fshare_state['status'],
+        'progress': fshare_state['progress'],
+        'message': fshare_state['message'],
+        'file_name': fshare_state['file_name'],
+        'file_size': fshare_state['file_size'],
+        'file_size_human': fshare_state['file_size_human'],
+        'phase': fshare_state['phase'],
+        'logs': fshare_state['logs'][-50:],
+    })
+
+
+@app.route('/api/fshare/stop', methods=['POST'])
+def fshare_stop():
+    global _fshare_engine
+    fshare_state['stop_flag'] = True
+    if _fshare_engine:
+        _fshare_engine.stop()
+    fshare_state['status'] = 'stopped'
+    fshare_state['message'] = 'Đã dừng bởi người dùng.'
+    return jsonify({'success': True})
+
+
+@app.route('/api/fshare/reset', methods=['POST'])
+def fshare_reset():
+    global _fshare_engine
+    data = request.get_json(force=True, silent=True) or {}
+    delete_files = bool(data.get('delete_files', False))
+    active = fshare_state.get('status') in ('fetching_info', 'downloading', 'uploading')
+
+    if active:
+        return jsonify({'success': False, 'error': 'Fshare đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
+
+    deleted = False
+    if delete_files and os.path.exists(FSHARE_TMP_ROOT):
+        try:
+            shutil.rmtree(FSHARE_TMP_ROOT, ignore_errors=True)
+            deleted = True
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if _fshare_engine:
+        _fshare_engine.stop()
+    _fshare_engine = None
+    _reset_fshare_state()
+    return jsonify({'success': True, 'message': 'Đã reset trạng thái Fshare', 'deleted_files': deleted})
+
+
+# ==================== MEDIAFIRE MODULE (Completely Isolated) ====================
+from mediafire_engine import MediaFireEngine
+
+mediafire_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
+}
+_mediafire_engine = None
+
+
+def _reset_mediafire_state():
+    mediafire_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+
+def _mediafire_progress(percent, message):
+    mediafire_state['progress'] = percent
+    mediafire_state['message'] = message
+
+
+def _mediafire_state_update(values):
+    for key, value in values.items():
+        if key in mediafire_state:
+            mediafire_state[key] = value
+
+
+def _mediafire_log(level, message):
+    mediafire_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(mediafire_state['logs']) > 200:
+        mediafire_state['logs'] = mediafire_state['logs'][-200:]
+    logging.log(level, "[MEDIAFIRE] %s", message)
+
+
+def _mediafire_stop_checker():
+    return mediafire_state.get('stop_flag', False)
+
+
+@app.route('/api/mediafire/info', methods=['POST'])
+def mediafire_info():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link MediaFire'})
+
+    engine = MediaFireEngine(lambda percent, message: None,
+                             lambda level, message: None,
+                             _mediafire_stop_checker)
+    info = engine.get_input_info(url)
+    if 'error' in info:
+        return jsonify({'success': False, 'error': info['error']})
+    return jsonify(info)
+
+
+@app.route('/api/mediafire/start', methods=['POST'])
+def mediafire_start():
+    global _mediafire_engine
+
+    if mediafire_state['status'] in ('fetching_info', 'downloading', 'uploading'):
+        return jsonify({'success': False, 'error': 'Đang có tiến trình MediaFire chạy. Vui lòng đợi hoặc dừng trước.'})
+
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    dest = data.get('destination', '').strip()
+
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link MediaFire'})
+    if not dest:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
+
+    dest_converted = dest
+    if 'drive.google.com' in dest:
+        fid = extract_drive_id(dest)
+        if fid:
+            dest_converted = 'gc:' + fid
+
+    mediafire_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo MediaFire...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+    _mediafire_engine = MediaFireEngine(_mediafire_progress, _mediafire_log, _mediafire_stop_checker, _mediafire_state_update)
+
+    def _run_pipeline():
+        try:
+            success = _mediafire_engine.run_full_pipeline(url, dest_converted)
+            if _mediafire_stop_checker():
+                mediafire_state['status'] = 'stopped'
+                mediafire_state['message'] = 'Đã dừng bởi người dùng.'
+            elif success:
+                mediafire_state['status'] = 'done'
+                mediafire_state['phase'] = 'done'
+                mediafire_state['message'] = 'Hoàn tất! File MediaFire đã được copy lên Google Drive.'
+                mediafire_state['progress'] = 100
+            else:
+                mediafire_state['status'] = 'error'
+                mediafire_state['phase'] = 'error'
+                if not mediafire_state['message']:
+                    mediafire_state['message'] = 'Tải MediaFire thất bại. Xem console để biết chi tiết.'
+        except Exception as e:
+            mediafire_state['status'] = 'error'
+            mediafire_state['phase'] = 'error'
+            mediafire_state['message'] = 'Lỗi: {0}'.format(str(e))
+
+    t = threading.Thread(target=_run_pipeline, daemon=True)
+    t.start()
+    return jsonify({'success': True, 'message': 'Đã bắt đầu tải MediaFire'})
+
+
+@app.route('/api/mediafire/status', methods=['GET'])
+def mediafire_status():
+    return jsonify({
+        'status': mediafire_state['status'],
+        'progress': mediafire_state['progress'],
+        'message': mediafire_state['message'],
+        'file_name': mediafire_state['file_name'],
+        'file_size': mediafire_state['file_size'],
+        'file_size_human': mediafire_state['file_size_human'],
+        'phase': mediafire_state['phase'],
+        'current_index': mediafire_state.get('current_index', 0),
+        'total_items': mediafire_state.get('total_items', 0),
+        'logs': mediafire_state['logs'][-50:],
+    })
+
+
+@app.route('/api/mediafire/stop', methods=['POST'])
+def mediafire_stop():
+    global _mediafire_engine
+    mediafire_state['stop_flag'] = True
+    if _mediafire_engine:
+        _mediafire_engine.stop()
+    mediafire_state['status'] = 'stopped'
+    mediafire_state['message'] = 'Đã dừng bởi người dùng.'
+    return jsonify({'success': True})
+
+
+@app.route('/api/mediafire/reset', methods=['POST'])
+def mediafire_reset():
+    global _mediafire_engine
+    data = request.get_json(force=True, silent=True) or {}
+    delete_files = bool(data.get('delete_files', False))
+    active = mediafire_state.get('status') in ('fetching_info', 'downloading', 'uploading')
+
+    if active:
+        return jsonify({'success': False, 'error': 'MediaFire đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
+
+    deleted = False
+    if delete_files and os.path.exists(MEDIAFIRE_TMP_ROOT):
+        try:
+            shutil.rmtree(MEDIAFIRE_TMP_ROOT, ignore_errors=True)
+            deleted = True
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if _mediafire_engine:
+        _mediafire_engine.stop()
+    _mediafire_engine = None
+    _reset_mediafire_state()
+    return jsonify({'success': True, 'message': 'Đã reset trạng thái MediaFire', 'deleted_files': deleted})
 
 
 if __name__ == '__main__':

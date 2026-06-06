@@ -63,6 +63,7 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
         if (tabName === 'config') {
             loadConfig();
             loadSAInfo();
+            loadFshareConfig();
         } else if (tabName === 'history') {
             loadQueue();
             loadHistory();
@@ -472,6 +473,670 @@ function updateBreadcrumb() {
     }
 })();
 
+
+// ==================== FSHARE TAB ====================
+(function () {
+    var fsAccountStatus = document.getElementById('fshareAccountStatus');
+    var fsUrlInput = document.getElementById('fshareUrl');
+    var fsPasswordInput = document.getElementById('fshareFilePassword');
+    var fsDestInput = document.getElementById('fshareDest');
+    var fsCheckBtn = document.getElementById('fshareCheckBtn');
+    var fsStartBtn = document.getElementById('fshareStartBtn');
+    var fsStopBtn = document.getElementById('fshareStopBtn');
+    var fsResetBtn = document.getElementById('fshareResetBtn');
+    var fsClearTempBtn = document.getElementById('fshareClearTempBtn');
+    var fsFileInfo = document.getElementById('fshareFileInfo');
+    var fsFileName = document.getElementById('fshareFileName');
+    var fsFileSize = document.getElementById('fshareFileSize');
+    var fsStatusSection = document.getElementById('fshareStatusSection');
+    var fsStatusText = document.getElementById('fshareStatusText');
+    var fsPhaseText = document.getElementById('fsharePhaseText');
+    var fsProgressBar = document.getElementById('fshareProgressBar');
+    var fsProgressPercent = document.getElementById('fshareProgressPercent');
+    var fsProgressDetail = document.getElementById('fshareProgressDetail');
+    var fsConsole = document.getElementById('fshareConsole');
+
+    if (!fsUrlInput || !fsDestInput) return;
+
+    var fsPollingInterval = null;
+    var fsLastLogCount = 0;
+    var fsRenderedLogKey = '';
+
+    var savedFsLink = localStorage.getItem('fs_link');
+    var savedFsDest = localStorage.getItem('fs_dest');
+    if (savedFsLink) fsUrlInput.value = savedFsLink;
+    if (savedFsDest) fsDestInput.value = savedFsDest;
+
+    function fsLoadConfigStatus() {
+        fetch('/api/fshare/config')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!fsAccountStatus) return;
+                if (data.complete) {
+                    fsAccountStatus.innerHTML = '✅ Fshare đã cấu hình cho <strong>' + (data.email || '') + '</strong>. Có thể tải bằng tài khoản VIP.';
+                    fsAccountStatus.style.color = '#22c55e';
+                    fsAccountStatus.style.borderColor = 'rgba(34,197,94,.35)';
+                    fsAccountStatus.style.background = 'rgba(34,197,94,.1)';
+                } else {
+                    fsAccountStatus.innerHTML = '⚠️ Chưa đủ cấu hình Fshare. Mở tab Cấu hình để nhập email và password.';
+                    fsAccountStatus.style.color = '#f59e0b';
+                    fsAccountStatus.style.borderColor = 'rgba(245,158,11,.35)';
+                    fsAccountStatus.style.background = 'rgba(245,158,11,.1)';
+                }
+            })
+            .catch(function () {
+                if (!fsAccountStatus) return;
+                fsAccountStatus.textContent = '❌ Không kiểm tra được cấu hình Fshare.';
+                fsAccountStatus.style.color = '#ef4444';
+            });
+    }
+
+    function fsValidUrl(url) {
+        return url.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(url);
+    }
+
+    function fsCheckInfo() {
+        var url = fsUrlInput.value.trim();
+        var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
+        if (!url) {
+            alert('Vui lòng nhập link Fshare!');
+            return;
+        }
+        if (!fsValidUrl(url)) {
+            alert('Link không phải Fshare file. Cần link dạng: https://www.fshare.vn/file/...');
+            return;
+        }
+
+        fsCheckBtn.disabled = true;
+        fsCheckBtn.textContent = '⏳ Đang kiểm tra...';
+        fsFileInfo.style.display = 'none';
+
+        fetch('/api/fshare/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, file_password: filePassword })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    fsFileName.textContent = data.file_name || data.file_id || 'Fshare file';
+                    fsFileSize.textContent = data.file_size_human || 'Direct link sẵn sàng';
+                    fsFileInfo.style.display = 'block';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không lấy được thông tin file'));
+                    fsLoadConfigStatus();
+                }
+            })
+            .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+            .finally(function () {
+                fsCheckBtn.disabled = false;
+                fsCheckBtn.textContent = '🔍 Kiểm tra link';
+            });
+    }
+
+    function fsStart() {
+        var url = fsUrlInput.value.trim();
+        var dest = fsDestInput.value.trim();
+        var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
+
+        if (!url) { alert('Vui lòng nhập link Fshare!'); return; }
+        if (!fsValidUrl(url)) { alert('Link không phải Fshare file.'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        localStorage.setItem('fs_link', url);
+        localStorage.setItem('fs_dest', dest);
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        fsStartBtn.disabled = true;
+        fsStartBtn.textContent = '⏳ Đang khởi tạo...';
+
+        fetch('/api/fshare/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, destination: dest, file_password: filePassword })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    fsStatusSection.style.display = 'block';
+                    fsConsole.textContent = 'Đang khởi tạo pipeline Fshare...\n';
+                    fsLastLogCount = 0;
+                    fsStartPolling();
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể bắt đầu'));
+                    fsStartBtn.disabled = false;
+                    fsStartBtn.textContent = '🚀 Bắt đầu tải';
+                    fsLoadConfigStatus();
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+                fsStartBtn.disabled = false;
+                fsStartBtn.textContent = '🚀 Bắt đầu tải';
+            });
+    }
+
+    function fsStartPolling() {
+        if (fsPollingInterval) clearInterval(fsPollingInterval);
+        fsPollingInterval = setInterval(fsPollStatus, 2000);
+        fsPollStatus();
+    }
+
+    function fsStopPolling() {
+        if (fsPollingInterval) {
+            clearInterval(fsPollingInterval);
+            fsPollingInterval = null;
+        }
+    }
+
+    function fsRenderLogs(logs, replace) {
+        if (!logs || logs.length === 0) {
+            if (replace) {
+                fsConsole.textContent = 'Đang chờ console...';
+                fsLastLogCount = 0;
+                fsRenderedLogKey = '';
+            }
+            return;
+        }
+
+        var start = replace ? 0 : fsLastLogCount;
+        var newLogs = logs.slice(start);
+        if (replace) {
+            fsConsole.innerHTML = '';
+        } else if (newLogs.length === 0) {
+            var lastLog = logs[logs.length - 1];
+            var currentKey = logs.length + '|' + (lastLog.time || '') + '|' + (lastLog.msg || '');
+            if (currentKey !== fsRenderedLogKey && logs.length <= fsLastLogCount) {
+                newLogs = logs;
+                fsConsole.innerHTML = '';
+            }
+        }
+        if (newLogs.length === 0) return;
+
+        var html = '';
+        for (var i = newLogs.length - 1; i >= 0; i--) {
+            var log = newLogs[i];
+            var color = '#a5b4fc';
+            if (log.level === 'ERROR') color = '#ef4444';
+            else if (log.level === 'WARNING') color = '#f59e0b';
+            else if (log.level === 'INFO') color = '#38bdf8';
+            else if (log.level === 'DEBUG') color = '#64748b';
+            var safeMsg = String(log.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<span style="color:' + color + '">[' + log.time + '] ' + safeMsg + '</span>\n';
+        }
+
+        if (replace) fsConsole.innerHTML = html;
+        else fsConsole.innerHTML = html + fsConsole.innerHTML;
+        fsLastLogCount = logs.length;
+        var last = logs[logs.length - 1];
+        fsRenderedLogKey = logs.length + '|' + (last.time || '') + '|' + (last.msg || '');
+        fsConsole.scrollTop = 0;
+    }
+
+    function fsUpdateStatusUI(data, replaceLogs) {
+        var pct = data.progress || 0;
+        fsProgressBar.style.width = pct + '%';
+        fsProgressPercent.textContent = pct + '%';
+        fsProgressBar.style.background = pct <= 50
+            ? 'linear-gradient(90deg, #3b82f6, #60a5fa)'
+            : 'linear-gradient(90deg, #22c55e, #4ade80)';
+
+        fsStatusText.textContent = data.message || 'Đang xử lý...';
+        var detail = '';
+        if (data.file_name) detail += data.file_name;
+        if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
+        fsProgressDetail.textContent = detail;
+
+        if (data.phase === 'info' || data.status === 'fetching_info') {
+            fsPhaseText.textContent = '🔎 Đang lấy direct link Fshare';
+        } else if (data.phase === 'download' || data.status === 'downloading') {
+            fsPhaseText.textContent = '📥 Đang tải từ Fshare';
+        } else if (data.phase === 'upload' || data.status === 'uploading') {
+            fsPhaseText.textContent = '📤 Đang đẩy lên Google Drive';
+        }
+
+        fsRenderLogs(data.logs || [], replaceLogs);
+
+        if (data.status === 'done') {
+            fsStopPolling();
+            fsStatusText.textContent = '✅ ' + (data.message || 'Hoàn tất!');
+            fsStatusText.style.color = '#22c55e';
+            fsPhaseText.textContent = '🎉 Xong!';
+            fsStopBtn.style.display = 'none';
+            fsStartBtn.disabled = false;
+            fsStartBtn.textContent = '🚀 Bắt đầu tải';
+        } else if (data.status === 'error') {
+            fsStopPolling();
+            fsStatusText.textContent = '❌ ' + (data.message || 'Lỗi!');
+            fsStatusText.style.color = '#ef4444';
+            fsPhaseText.textContent = '⚠️ Thất bại';
+            fsStopBtn.style.display = 'none';
+            fsStartBtn.disabled = false;
+            fsStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'stopped') {
+            fsStopPolling();
+            fsStatusText.textContent = '⏹ ' + (data.message || 'Đã dừng.');
+            fsStatusText.style.color = '#f59e0b';
+            fsPhaseText.textContent = '⏸ Đã tạm dừng, có thể resume';
+            fsStopBtn.style.display = 'none';
+            fsStartBtn.disabled = false;
+            fsStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading') {
+            fsStartBtn.disabled = true;
+            fsStartBtn.textContent = '⏳ Đang chạy...';
+            fsStatusSection.style.display = 'block';
+            fsStatusText.style.color = '#3b82f6';
+            fsStopBtn.style.display = 'block';
+        }
+    }
+
+    function fsPollStatus() {
+        fetch('/api/fshare/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) { fsUpdateStatusUI(data, false); })
+            .catch(function () { });
+    }
+
+    function fsRestoreStatus() {
+        fetch('/api/fshare/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var hasLogs = data.logs && data.logs.length > 0;
+                var active = data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading';
+                var terminal = data.status === 'done' || data.status === 'error' || data.status === 'stopped';
+                if (!hasLogs && !active && !terminal) return;
+                fsStatusSection.style.display = 'block';
+                fsUpdateStatusUI(data, true);
+                if (active) fsStartPolling();
+            })
+            .catch(function () { });
+    }
+
+    function fsStop() {
+        fetch('/api/fshare/stop', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                fsStopPolling();
+                fsStatusText.textContent = '⏹ Đã dừng bởi người dùng.';
+                fsStartBtn.disabled = false;
+                fsStartBtn.textContent = '🚀 Bắt đầu tải';
+            })
+            .catch(function (e) { alert('Lỗi: ' + e); });
+    }
+
+    function fsReset(deleteFiles) {
+        var confirmMsg = deleteFiles
+            ? 'Xóa toàn bộ file tạm Fshare (.part) và trạng thái hiện tại? Sau đó sẽ tải lại từ đầu.'
+            : 'Xóa trạng thái/log Fshare đang hiển thị? File .part để resume sẽ được giữ lại.';
+        if (!confirm(confirmMsg)) return;
+
+        fetch('/api/fshare/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delete_files: !!deleteFiles })
+        })
+            .then(function (r) {
+                return r.json().then(function (data) {
+                    if (!r.ok) throw new Error(data.error || 'Reset thất bại');
+                    return data;
+                });
+            })
+            .then(function () {
+                fsStopPolling();
+                fsStatusSection.style.display = 'none';
+                fsStatusText.textContent = 'Đang xử lý...';
+                fsPhaseText.textContent = '';
+                fsProgressBar.style.width = '0%';
+                fsProgressPercent.textContent = '0%';
+                fsProgressDetail.textContent = '';
+                fsConsole.textContent = 'Đang chờ...';
+                fsLastLogCount = 0;
+                fsRenderedLogKey = '';
+                fsStartBtn.disabled = false;
+                fsStartBtn.textContent = '🚀 Bắt đầu tải';
+                fsStopBtn.style.display = 'none';
+                alert(deleteFiles ? 'Đã xóa trạng thái và file tạm.' : 'Đã xóa trạng thái.');
+            })
+            .catch(function (e) { alert('Lỗi: ' + e.message); });
+    }
+
+    fsCheckBtn.addEventListener('click', fsCheckInfo);
+    fsStartBtn.addEventListener('click', fsStart);
+    fsStopBtn.addEventListener('click', fsStop);
+    if (fsResetBtn) fsResetBtn.addEventListener('click', function () { fsReset(false); });
+    if (fsClearTempBtn) fsClearTempBtn.addEventListener('click', function () { fsReset(true); });
+
+    fsLoadConfigStatus();
+    fsRestoreStatus();
+})();
+
+// ==================== MEDIAFIRE TAB ====================
+(function () {
+    var mfUrlInput = document.getElementById('mediafireUrl');
+    var mfDestInput = document.getElementById('mediafireDest');
+    var mfCheckBtn = document.getElementById('mediafireCheckBtn');
+    var mfStartBtn = document.getElementById('mediafireStartBtn');
+    var mfStopBtn = document.getElementById('mediafireStopBtn');
+    var mfResetBtn = document.getElementById('mediafireResetBtn');
+    var mfClearTempBtn = document.getElementById('mediafireClearTempBtn');
+    var mfFileInfo = document.getElementById('mediafireFileInfo');
+    var mfFileName = document.getElementById('mediafireFileName');
+    var mfFileSize = document.getElementById('mediafireFileSize');
+    var mfStatusSection = document.getElementById('mediafireStatusSection');
+    var mfStatusText = document.getElementById('mediafireStatusText');
+    var mfPhaseText = document.getElementById('mediafirePhaseText');
+    var mfProgressBar = document.getElementById('mediafireProgressBar');
+    var mfProgressPercent = document.getElementById('mediafireProgressPercent');
+    var mfProgressDetail = document.getElementById('mediafireProgressDetail');
+    var mfConsole = document.getElementById('mediafireConsole');
+
+    if (!mfUrlInput || !mfDestInput) return;
+
+    var mfPollingInterval = null;
+    var mfLastLogCount = 0;
+    var mfRenderedLogKey = '';
+
+    var savedMfLink = localStorage.getItem('mf_link');
+    var savedMfDest = localStorage.getItem('mf_dest');
+    if (savedMfLink) mfUrlInput.value = savedMfLink;
+    if (savedMfDest) mfDestInput.value = savedMfDest;
+
+    function mfValidUrl(url) {
+        return url.indexOf('mediafire.com/folder/') > -1 ||
+            url.indexOf('mediafire.com/file/') > -1 ||
+            url.indexOf('download') > -1 && url.indexOf('mediafire.com') > -1 ||
+            /^[A-Za-z0-9]{8,}$/.test(url);
+    }
+
+    function mfCheckInfo() {
+        var url = mfUrlInput.value.trim();
+        if (!url) {
+            alert('Vui lòng nhập link MediaFire!');
+            return;
+        }
+        if (!mfValidUrl(url)) {
+            alert('Danh sách không có link MediaFire folder/file hợp lệ.');
+            return;
+        }
+
+        mfCheckBtn.disabled = true;
+        mfCheckBtn.textContent = '⏳ Đang kiểm tra...';
+        mfFileInfo.style.display = 'none';
+
+        fetch('/api/mediafire/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    mfFileName.textContent = data.file_name || 'MediaFire file';
+                    var detail = data.file_size_human || 'Chưa có dung lượng';
+                    if (data.item_count) {
+                        detail += ' · ' + data.item_count + ' file';
+                    }
+                    if (data.folder_count) {
+                        detail += ' · ' + data.folder_count + ' folder';
+                    }
+                    if (data.direct_file_count) {
+                        detail += ' · ' + data.direct_file_count + ' link file';
+                    }
+                    mfFileSize.textContent = detail;
+                    mfFileInfo.style.display = 'block';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không lấy được thông tin file'));
+                }
+            })
+            .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+            .finally(function () {
+                mfCheckBtn.disabled = false;
+                mfCheckBtn.textContent = '🔍 Kiểm tra link';
+            });
+    }
+
+    function mfStart() {
+        var url = mfUrlInput.value.trim();
+        var dest = mfDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link MediaFire!'); return; }
+        if (!mfValidUrl(url)) { alert('Danh sách không có link MediaFire folder/file hợp lệ.'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        localStorage.setItem('mf_link', url);
+        localStorage.setItem('mf_dest', dest);
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        mfStartBtn.disabled = true;
+        mfStartBtn.textContent = '⏳ Đang khởi tạo...';
+
+        fetch('/api/mediafire/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, destination: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    mfStatusSection.style.display = 'block';
+                    mfConsole.textContent = 'Đang khởi tạo pipeline MediaFire...\n';
+                    mfLastLogCount = 0;
+                    mfStartPolling();
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể bắt đầu'));
+                    mfStartBtn.disabled = false;
+                    mfStartBtn.textContent = '🚀 Bắt đầu tải';
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+                mfStartBtn.disabled = false;
+                mfStartBtn.textContent = '🚀 Bắt đầu tải';
+            });
+    }
+
+    function mfStartPolling() {
+        if (mfPollingInterval) clearInterval(mfPollingInterval);
+        mfPollingInterval = setInterval(mfPollStatus, 2000);
+        mfPollStatus();
+    }
+
+    function mfStopPolling() {
+        if (mfPollingInterval) {
+            clearInterval(mfPollingInterval);
+            mfPollingInterval = null;
+        }
+    }
+
+    function mfRenderLogs(logs, replace) {
+        if (!logs || logs.length === 0) {
+            if (replace) {
+                mfConsole.textContent = 'Đang chờ console...';
+                mfLastLogCount = 0;
+                mfRenderedLogKey = '';
+            }
+            return;
+        }
+
+        var start = replace ? 0 : mfLastLogCount;
+        var newLogs = logs.slice(start);
+        if (replace) {
+            mfConsole.innerHTML = '';
+        } else if (newLogs.length === 0) {
+            var lastLog = logs[logs.length - 1];
+            var currentKey = logs.length + '|' + (lastLog.time || '') + '|' + (lastLog.msg || '');
+            if (currentKey !== mfRenderedLogKey && logs.length <= mfLastLogCount) {
+                newLogs = logs;
+                mfConsole.innerHTML = '';
+            }
+        }
+        if (newLogs.length === 0) return;
+
+        var html = '';
+        for (var i = newLogs.length - 1; i >= 0; i--) {
+            var log = newLogs[i];
+            var color = '#a5b4fc';
+            if (log.level === 'ERROR') color = '#ef4444';
+            else if (log.level === 'WARNING') color = '#f59e0b';
+            else if (log.level === 'INFO') color = '#38bdf8';
+            else if (log.level === 'DEBUG') color = '#64748b';
+            var safeMsg = String(log.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<span style="color:' + color + '">[' + log.time + '] ' + safeMsg + '</span>\n';
+        }
+
+        if (replace) mfConsole.innerHTML = html;
+        else mfConsole.innerHTML = html + mfConsole.innerHTML;
+        mfLastLogCount = logs.length;
+        var last = logs[logs.length - 1];
+        mfRenderedLogKey = logs.length + '|' + (last.time || '') + '|' + (last.msg || '');
+        mfConsole.scrollTop = 0;
+    }
+
+    function mfUpdateStatusUI(data, replaceLogs) {
+        var pct = data.progress || 0;
+        mfProgressBar.style.width = pct + '%';
+        mfProgressPercent.textContent = pct + '%';
+        mfProgressBar.style.background = pct <= 50
+            ? 'linear-gradient(90deg, #3b82f6, #60a5fa)'
+            : 'linear-gradient(90deg, #22c55e, #4ade80)';
+
+        mfStatusText.textContent = data.message || 'Đang xử lý...';
+        var detail = '';
+        if (data.total_items) detail += (data.current_index || 0) + '/' + data.total_items;
+        if (data.file_name) detail += (detail ? ' · ' : '') + data.file_name;
+        if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
+        mfProgressDetail.textContent = detail;
+
+        if (data.phase === 'info' || data.status === 'fetching_info') {
+            mfPhaseText.textContent = '🔎 Đang expand danh sách MediaFire';
+        } else if (data.phase === 'download' || data.status === 'downloading') {
+            mfPhaseText.textContent = '📥 Đang tải từ MediaFire';
+        } else if (data.phase === 'upload' || data.status === 'uploading') {
+            mfPhaseText.textContent = '📤 Đang đẩy lên Google Drive';
+        }
+
+        mfRenderLogs(data.logs || [], replaceLogs);
+
+        if (data.status === 'done') {
+            mfStopPolling();
+            mfStatusText.textContent = '✅ ' + (data.message || 'Hoàn tất!');
+            mfStatusText.style.color = '#22c55e';
+            mfPhaseText.textContent = '🎉 Xong!';
+            mfStopBtn.style.display = 'none';
+            mfStartBtn.disabled = false;
+            mfStartBtn.textContent = '🚀 Bắt đầu tải';
+        } else if (data.status === 'error') {
+            mfStopPolling();
+            mfStatusText.textContent = '❌ ' + (data.message || 'Lỗi!');
+            mfStatusText.style.color = '#ef4444';
+            mfPhaseText.textContent = '⚠️ Thất bại';
+            mfStopBtn.style.display = 'none';
+            mfStartBtn.disabled = false;
+            mfStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'stopped') {
+            mfStopPolling();
+            mfStatusText.textContent = '⏹ ' + (data.message || 'Đã dừng.');
+            mfStatusText.style.color = '#f59e0b';
+            mfPhaseText.textContent = '⏸ Đã tạm dừng, có thể resume';
+            mfStopBtn.style.display = 'none';
+            mfStartBtn.disabled = false;
+            mfStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading') {
+            mfStartBtn.disabled = true;
+            mfStartBtn.textContent = '⏳ Đang chạy...';
+            mfStatusSection.style.display = 'block';
+            mfStatusText.style.color = '#3b82f6';
+            mfStopBtn.style.display = 'block';
+        }
+    }
+
+    function mfPollStatus() {
+        fetch('/api/mediafire/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) { mfUpdateStatusUI(data, false); })
+            .catch(function () { });
+    }
+
+    function mfRestoreStatus() {
+        fetch('/api/mediafire/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var hasLogs = data.logs && data.logs.length > 0;
+                var active = data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading';
+                var terminal = data.status === 'done' || data.status === 'error' || data.status === 'stopped';
+                if (!hasLogs && !active && !terminal) return;
+                mfStatusSection.style.display = 'block';
+                mfUpdateStatusUI(data, true);
+                if (active) mfStartPolling();
+            })
+            .catch(function () { });
+    }
+
+    function mfStop() {
+        fetch('/api/mediafire/stop', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                mfStopPolling();
+                mfStatusText.textContent = '⏹ Đã dừng bởi người dùng.';
+                mfStartBtn.disabled = false;
+                mfStartBtn.textContent = '🚀 Bắt đầu tải';
+            })
+            .catch(function (e) { alert('Lỗi: ' + e); });
+    }
+
+    function mfReset(deleteFiles) {
+        var confirmMsg = deleteFiles
+            ? 'Xóa toàn bộ file tạm MediaFire (.part) và trạng thái hiện tại? Sau đó sẽ tải lại từ đầu.'
+            : 'Xóa trạng thái/log MediaFire đang hiển thị? File .part để resume sẽ được giữ lại.';
+        if (!confirm(confirmMsg)) return;
+
+        fetch('/api/mediafire/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delete_files: !!deleteFiles })
+        })
+            .then(function (r) {
+                return r.json().then(function (data) {
+                    if (!r.ok) throw new Error(data.error || 'Reset thất bại');
+                    return data;
+                });
+            })
+            .then(function () {
+                mfStopPolling();
+                mfStatusSection.style.display = 'none';
+                mfStatusText.textContent = 'Đang xử lý...';
+                mfPhaseText.textContent = '';
+                mfProgressBar.style.width = '0%';
+                mfProgressPercent.textContent = '0%';
+                mfProgressDetail.textContent = '';
+                mfConsole.textContent = 'Đang chờ...';
+                mfLastLogCount = 0;
+                mfRenderedLogKey = '';
+                mfStartBtn.disabled = false;
+                mfStartBtn.textContent = '🚀 Bắt đầu tải';
+                mfStopBtn.style.display = 'none';
+                alert(deleteFiles ? 'Đã xóa trạng thái và file tạm.' : 'Đã xóa trạng thái.');
+            })
+            .catch(function (e) { alert('Lỗi: ' + e.message); });
+    }
+
+    mfCheckBtn.addEventListener('click', mfCheckInfo);
+    mfStartBtn.addEventListener('click', mfStart);
+    mfStopBtn.addEventListener('click', mfStop);
+    if (mfResetBtn) mfResetBtn.addEventListener('click', function () { mfReset(false); });
+    if (mfClearTempBtn) mfClearTempBtn.addEventListener('click', function () { mfReset(true); });
+
+    mfRestoreStatus();
+})();
+
 // ==================== QUEUE & POLLING ====================
 async function poll() {
     if (!isPolling) return;
@@ -813,6 +1478,75 @@ document.getElementById('saveConfigBtn').addEventListener('click', function () {
     };
     xhr.send(JSON.stringify({ content: editor.value }));
 });
+
+// ==================== FSHARE CONFIG ====================
+function loadFshareConfig() {
+    var email = document.getElementById('fshareConfigEmail');
+    var password = document.getElementById('fshareConfigPassword');
+    var status = document.getElementById('fshareConfigStatus');
+    if (!email || !status) return;
+
+    status.textContent = 'Đang tải cấu hình Fshare...';
+    status.className = 'config-status';
+
+    fetch('/api/fshare/config')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            email.value = data.email || '';
+            password.value = '';
+            var parts = [];
+            if (data.password_masked) parts.push('password: ' + data.password_masked);
+            status.textContent = data.complete
+                ? '✅ Fshare đã cấu hình' + (parts.length ? ' (' + parts.join(', ') + ')' : '')
+                : '⚠️ Chưa đủ cấu hình Fshare. Cần email và password.';
+            status.className = data.complete ? 'config-status success' : 'config-status';
+        })
+        .catch(function () {
+            status.textContent = '❌ Không tải được cấu hình Fshare';
+            status.className = 'config-status error';
+        });
+}
+
+function saveFshareConfig() {
+    var email = document.getElementById('fshareConfigEmail');
+    var password = document.getElementById('fshareConfigPassword');
+    var status = document.getElementById('fshareConfigStatus');
+    if (!email || !status) return;
+
+    status.textContent = 'Đang lưu Fshare...';
+    status.className = 'config-status';
+
+    var payload = {
+        email: email.value.trim(),
+        password: password.value.trim() || '__KEEP__'
+    };
+
+    fetch('/api/fshare/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = data.complete ? '✅ Đã lưu cấu hình Fshare!' : '⚠️ Đã lưu, nhưng cấu hình vẫn chưa đủ.';
+                status.className = data.complete ? 'config-status success' : 'config-status';
+                password.value = '';
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi lưu Fshare');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+var loadFshareConfigBtn = document.getElementById('loadFshareConfigBtn');
+var saveFshareConfigBtn = document.getElementById('saveFshareConfigBtn');
+if (loadFshareConfigBtn) loadFshareConfigBtn.addEventListener('click', loadFshareConfig);
+if (saveFshareConfigBtn) saveFshareConfigBtn.addEventListener('click', saveFshareConfig);
 
 // ==================== SA MANAGEMENT ====================
 var saUploadArea = document.getElementById('saUploadArea');

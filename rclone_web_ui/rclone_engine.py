@@ -5,6 +5,7 @@ import re
 import os
 import glob
 import shutil
+import sys
 
 class RcloneEngine:
     def __init__(self, progress_callback, log_callback, stop_checker):
@@ -61,6 +62,21 @@ class RcloneEngine:
             
         return path
 
+    def _cmd_for_subprocess(self, cmd):
+        """Use bytes argv to bypass ASCII filesystem encoding on old CentOS/Python."""
+        return [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
+
+    def _safe_print(self, message):
+        """Print diagnostics without crashing when stdout is ASCII-only."""
+        try:
+            print(message)
+        except UnicodeEncodeError:
+            try:
+                sys.stdout.buffer.write((message + "\n").encode('utf-8', errors='replace'))
+                sys.stdout.flush()
+            except Exception:
+                pass
+
     def run_copy(self, source, destination):
         binary = self._detect_binary()
         
@@ -95,7 +111,7 @@ class RcloneEngine:
                 self.log_callback(logging.INFO, f"Using rclone config: {config_path}")
 
             # Use raw bytes mode to bypass Python's filesystem encoding (ASCII on CentOS 7)
-            cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
+            cmd_bytes = self._cmd_for_subprocess(cmd)
 
             self.process = subprocess.Popen(
                 cmd_bytes,
@@ -113,8 +129,8 @@ class RcloneEngine:
                     if not line:
                         continue
                         
-                    # Print to system logs for debugging
-                    print(f"[RCLONE RAW] {line}")
+                    # Print to system logs for debugging. Do not let ASCII stdout kill the job.
+                    self._safe_print(f"[RCLONE RAW] {line}")
                     self.log_callback(logging.DEBUG, line)
                     
                     match = progress_regex.search(line)
@@ -188,7 +204,7 @@ class RcloneEngine:
         
         try:
             # Use raw bytes mode to bypass Python's filesystem encoding (ASCII on CentOS 7)
-            cmd_bytes = [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
+            cmd_bytes = self._cmd_for_subprocess(cmd)
 
             self.process = subprocess.Popen(
                 cmd_bytes,
@@ -279,19 +295,19 @@ class RcloneEngine:
         self._last_cmd = ' '.join(cmd)
         self._last_stderr = ''
         try:
-            print(f"[EXPLORER] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self._safe_print(f"[EXPLORER] Running: {' '.join(cmd)}")
+            result = subprocess.run(self._cmd_for_subprocess(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             stdout_text = result.stdout.decode('utf-8', errors='replace')
             stderr_text = result.stderr.decode('utf-8', errors='replace')
             self._last_stderr = stderr_text
             if result.returncode == 0:
                 return _json.loads(stdout_text)
             else:
-                print(f"[EXPLORER] stderr: {stderr_text}")
+                self._safe_print(f"[EXPLORER] stderr: {stderr_text}")
                 return []
         except Exception as e:
             self._last_stderr = str(e)
-            print(f"[EXPLORER] Error: {e}")
+            self._safe_print(f"[EXPLORER] Error: {e}")
             return []
 
     def make_dir(self, path):
@@ -299,11 +315,11 @@ class RcloneEngine:
         path = self._prepare_remote(path)
         cmd = self._base_cmd("mkdir", path)
         try:
-            print(f"[MKDIR] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            self._safe_print(f"[MKDIR] Running: {' '.join(cmd)}")
+            result = subprocess.run(self._cmd_for_subprocess(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             return result.returncode == 0
         except Exception as e:
-            print(f"[MKDIR] Error: {e}")
+            self._safe_print(f"[MKDIR] Error: {e}")
             return False
 
     def get_folder_name(self, remote_path):
@@ -312,8 +328,8 @@ class RcloneEngine:
         path = self._prepare_remote(remote_path)
         cmd = self._base_cmd("lsjson", path, "--stat")
         try:
-            print(f"[FOLDER_NAME] Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            self._safe_print(f"[FOLDER_NAME] Running: {' '.join(cmd)}")
+            result = subprocess.run(self._cmd_for_subprocess(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             if result.returncode == 0:
                 data = _json.loads(result.stdout.decode('utf-8', errors='replace'))
                 # lsjson --stat returns a single object or array with one item
@@ -323,6 +339,5 @@ class RcloneEngine:
                     return data.get('Name', '')
             return ''
         except Exception as e:
-            print(f"[FOLDER_NAME] Error: {e}")
+            self._safe_print(f"[FOLDER_NAME] Error: {e}")
             return ''
-

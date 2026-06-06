@@ -22,6 +22,8 @@ rclone_web_ui/sa/
 rclone_web_ui/history.json
 rclone_web_ui/queue.json
 rclone_web_ui/dest_history.json
+rclone_web_ui/fshare_config.json
+rclone_web_ui/terabox_cookie.txt
 rclone_web_ui/.brain/
 .brain/
 .gemini/
