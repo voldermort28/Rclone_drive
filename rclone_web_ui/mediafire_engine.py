@@ -475,11 +475,31 @@ class MediaFireEngine:
 
         try:
             self._response = requests.get(direct['url'], headers=headers, stream=True, timeout=30)
+            if self._response.status_code not in (200, 206) and existing > 0:
+                status_code = self._response.status_code
+                try:
+                    self._response.close()
+                except Exception:
+                    pass
+                self.log_callback(
+                    logging.WARNING,
+                    "Resume MediaFire bị từ chối HTTP {0}; xóa .part và tải lại file này từ đầu.".format(status_code)
+                )
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except Exception:
+                    pass
+                existing = 0
+                headers.pop('Range', None)
+                self._response = requests.get(direct['url'], headers=headers, stream=True, timeout=30)
+
             if self._response.status_code not in (200, 206):
                 self.log_callback(logging.ERROR, "MediaFire download HTTP {0}".format(self._response.status_code))
                 return None
 
             if existing > 0 and self._response.status_code == 200:
+                self.log_callback(logging.WARNING, "MediaFire không resume bằng Range; tải lại file này từ đầu.")
                 existing = 0
                 if os.path.exists(part_path):
                     os.remove(part_path)
