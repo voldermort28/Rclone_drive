@@ -81,6 +81,13 @@ class MediaFireEngine:
             return [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
         return cmd
 
+    def _path_for_io(self, path):
+        if isinstance(path, bytes):
+            return path
+        if sys.getfilesystemencoding().lower() == 'ascii':
+            return path.encode('utf-8')
+        return path
+
     def _headers(self, extra=None):
         headers = {
             'User-Agent': self.USER_AGENT,
@@ -467,7 +474,8 @@ class MediaFireEngine:
 
         os.makedirs(tmp_dir, exist_ok=True)
         part_path = os.path.join(tmp_dir, 'download.part')
-        existing = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+        part_path_for_io = self._path_for_io(part_path)
+        existing = os.path.getsize(part_path_for_io) if os.path.exists(part_path_for_io) else 0
         headers = self._headers({'Accept': '*/*'})
         if existing > 0:
             headers['Range'] = 'bytes={0}-'.format(existing)
@@ -486,8 +494,8 @@ class MediaFireEngine:
                     "Resume MediaFire bị từ chối HTTP {0}; xóa .part và tải lại file này từ đầu.".format(status_code)
                 )
                 try:
-                    if os.path.exists(part_path):
-                        os.remove(part_path)
+                    if os.path.exists(part_path_for_io):
+                        os.remove(part_path_for_io)
                 except Exception:
                     pass
                 existing = 0
@@ -501,20 +509,21 @@ class MediaFireEngine:
             if existing > 0 and self._response.status_code == 200:
                 self.log_callback(logging.WARNING, "MediaFire không resume bằng Range; tải lại file này từ đầu.")
                 existing = 0
-                if os.path.exists(part_path):
-                    os.remove(part_path)
+                if os.path.exists(part_path_for_io):
+                    os.remove(part_path_for_io)
 
             file_name = self._guess_name_from_response(self._response, direct.get('file_name') or 'mediafire_download')
             total_header = int(self._response.headers.get('Content-Length') or 0)
             total_size = total_header + existing if self._response.status_code == 206 else total_header
             final_path = os.path.join(tmp_dir, file_name)
+            final_path_for_io = self._path_for_io(final_path)
             mode = 'ab' if self._response.status_code == 206 and existing > 0 else 'wb'
 
             self._emit_state(file_name=file_name, file_size=total_size,
                              file_size_human=self._human_size(total_size))
             downloaded = existing
             last_emit = 0
-            with open(part_path, mode) as f:
+            with open(part_path_for_io, mode) as f:
                 for chunk in self._response.iter_content(chunk_size=self.CHUNK_SIZE):
                     if self.stop_checker() or self._stopped:
                         self.log_callback(logging.WARNING, "Download MediaFire bị dừng.")
@@ -530,12 +539,12 @@ class MediaFireEngine:
                         self._progress(pct, "Downloading: {0}".format(self._human_size(downloaded)))
                         last_emit = now
 
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(part_path, final_path)
+            if os.path.exists(final_path_for_io):
+                os.remove(final_path_for_io)
+            os.rename(part_path_for_io, final_path_for_io)
             self._progress(50, "Tải MediaFire hoàn tất")
             self.log_callback(logging.INFO, "Đã tải về VPS: {0}".format(final_path))
-            return final_path
+            return final_path_for_io
         except Exception as e:
             self.log_callback(logging.ERROR, "Lỗi tải MediaFire: {0}".format(str(e)))
             return None
