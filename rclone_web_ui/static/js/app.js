@@ -1137,6 +1137,321 @@ function updateBreadcrumb() {
     mfRestoreStatus();
 })();
 
+// ==================== MEGA TAB ====================
+(function () {
+    var megaUrlInput = document.getElementById('megaUrl');
+    var megaDestInput = document.getElementById('megaDest');
+    var megaCheckBtn = document.getElementById('megaCheckBtn');
+    var megaStartBtn = document.getElementById('megaStartBtn');
+    var megaStopBtn = document.getElementById('megaStopBtn');
+    var megaResetBtn = document.getElementById('megaResetBtn');
+    var megaClearTempBtn = document.getElementById('megaClearTempBtn');
+    var megaFileInfo = document.getElementById('megaFileInfo');
+    var megaFileName = document.getElementById('megaFileName');
+    var megaFileSize = document.getElementById('megaFileSize');
+    var megaStatusSection = document.getElementById('megaStatusSection');
+    var megaStatusText = document.getElementById('megaStatusText');
+    var megaPhaseText = document.getElementById('megaPhaseText');
+    var megaProgressBar = document.getElementById('megaProgressBar');
+    var megaProgressPercent = document.getElementById('megaProgressPercent');
+    var megaProgressDetail = document.getElementById('megaProgressDetail');
+    var megaConsole = document.getElementById('megaConsole');
+
+    if (!megaUrlInput || !megaDestInput) return;
+
+    var megaPollingInterval = null;
+    var megaLastLogCount = 0;
+    var megaRenderedLogKey = '';
+
+    var savedMegaLink = localStorage.getItem('mega_link');
+    var savedMegaDest = localStorage.getItem('mega_dest');
+    if (savedMegaLink) megaUrlInput.value = savedMegaLink;
+    if (savedMegaDest) megaDestInput.value = savedMegaDest;
+
+    function megaValidUrl(url) {
+        return url.indexOf('mega.nz/folder/') > -1 ||
+            url.indexOf('mega.nz/#F!') > -1;
+    }
+
+    function megaCheckInfo() {
+        var url = megaUrlInput.value.trim();
+        if (!url) {
+            alert('Vui lòng nhập link Mega.nz!');
+            return;
+        }
+        if (!megaValidUrl(url)) {
+            alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!');
+            return;
+        }
+
+        megaCheckBtn.disabled = true;
+        megaCheckBtn.textContent = '⏳ Đang kiểm tra...';
+        megaFileInfo.style.display = 'none';
+
+        fetch('/api/mega/info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    megaFileName.textContent = data.folder_name || 'Mega Folder';
+                    var detail = data.total_size_human || 'Chưa có dung lượng';
+                    if (data.file_count) {
+                        detail += ' · ' + data.file_count + ' file';
+                    }
+                    megaFileSize.textContent = detail;
+                    megaFileInfo.style.display = 'block';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không lấy được thông tin thư mục'));
+                }
+            })
+            .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+            .finally(function () {
+                megaCheckBtn.disabled = false;
+                megaCheckBtn.textContent = '🔍 Kiểm tra link';
+            });
+    }
+
+    function megaStart() {
+        var url = megaUrlInput.value.trim();
+        var dest = megaDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link Mega.nz!'); return; }
+        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        localStorage.setItem('mega_link', url);
+        localStorage.setItem('mega_dest', dest);
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        megaStartBtn.disabled = true;
+        megaStartBtn.textContent = '⏳ Đang khởi tạo...';
+
+        fetch('/api/mega/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, destination: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    megaStatusSection.style.display = 'block';
+                    megaConsole.textContent = 'Đang khởi tạo pipeline Mega...\n';
+                    megaLastLogCount = 0;
+                    megaStartPolling();
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể bắt đầu'));
+                    megaStartBtn.disabled = false;
+                    megaStartBtn.textContent = '🚀 Bắt đầu tải';
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+                megaStartBtn.disabled = false;
+                megaStartBtn.textContent = '🚀 Bắt đầu tải';
+            });
+    }
+
+    function megaStartPolling() {
+        if (megaPollingInterval) clearInterval(megaPollingInterval);
+        megaPollingInterval = setInterval(megaPollStatus, 2000);
+        megaPollStatus();
+    }
+
+    function megaStopPolling() {
+        if (megaPollingInterval) {
+            clearInterval(megaPollingInterval);
+            megaPollingInterval = null;
+        }
+    }
+
+    function megaRenderLogs(logs, replace) {
+        if (!logs || logs.length === 0) {
+            if (replace) {
+                megaConsole.textContent = 'Đang chờ console...';
+                megaLastLogCount = 0;
+                megaRenderedLogKey = '';
+            }
+            return;
+        }
+
+        var start = replace ? 0 : megaLastLogCount;
+        var newLogs = logs.slice(start);
+        if (replace) {
+            megaConsole.innerHTML = '';
+        } else if (newLogs.length === 0) {
+            var lastLog = logs[logs.length - 1];
+            var currentKey = logs.length + '|' + (lastLog.time || '') + '|' + (lastLog.msg || '');
+            if (currentKey !== megaRenderedLogKey && logs.length <= megaLastLogCount) {
+                newLogs = logs;
+                megaConsole.innerHTML = '';
+            }
+        }
+        if (newLogs.length === 0) return;
+
+        var html = '';
+        for (var i = newLogs.length - 1; i >= 0; i--) {
+            var log = newLogs[i];
+            var color = '#a5b4fc';
+            if (log.level === 'ERROR') color = '#ef4444';
+            else if (log.level === 'WARNING') color = '#f59e0b';
+            else if (log.level === 'INFO') color = '#38bdf8';
+            else if (log.level === 'DEBUG') color = '#64748b';
+            var safeMsg = String(log.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += '<span style="color:' + color + '">[' + log.time + '] ' + safeMsg + '</span>\n';
+        }
+
+        if (replace) megaConsole.innerHTML = html;
+        else megaConsole.innerHTML = html + megaConsole.innerHTML;
+        megaLastLogCount = logs.length;
+        var last = logs[logs.length - 1];
+        megaRenderedLogKey = logs.length + '|' + (last.time || '') + '|' + (last.msg || '');
+        megaConsole.scrollTop = 0;
+    }
+
+    function megaUpdateStatusUI(data, replaceLogs) {
+        var pct = data.progress || 0;
+        megaProgressBar.style.width = pct + '%';
+        megaProgressPercent.textContent = pct + '%';
+        megaProgressBar.style.background = pct <= 50
+            ? 'linear-gradient(90deg, #3b82f6, #60a5fa)'
+            : 'linear-gradient(90deg, #22c55e, #4ade80)';
+
+        megaStatusText.textContent = data.message || 'Đang xử lý...';
+        var detail = '';
+        if (data.total_items) detail += (data.current_index || 0) + '/' + data.total_items;
+        if (data.file_name) detail += (detail ? ' · ' : '') + data.file_name;
+        if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
+        megaProgressDetail.textContent = detail;
+
+        if (data.phase === 'info' || data.status === 'fetching_info') {
+            megaPhaseText.textContent = '🔎 Đang expand danh sách Mega.nz';
+        } else if (data.phase === 'download' || data.status === 'downloading') {
+            megaPhaseText.textContent = '📥 Đang tải từ Mega.nz';
+        } else if (data.phase === 'upload' || data.status === 'uploading') {
+            megaPhaseText.textContent = '📤 Đang đẩy lên Google Drive';
+        }
+
+        megaRenderLogs(data.logs || [], replaceLogs);
+
+        if (data.status === 'done') {
+            megaStopPolling();
+            megaStatusText.textContent = '✅ ' + (data.message || 'Hoàn tất!');
+            megaStatusText.style.color = '#22c55e';
+            megaPhaseText.textContent = '🎉 Xong!';
+            megaStopBtn.style.display = 'none';
+            megaStartBtn.disabled = false;
+            megaStartBtn.textContent = '🚀 Bắt đầu tải';
+        } else if (data.status === 'error') {
+            megaStopPolling();
+            megaStatusText.textContent = '❌ ' + (data.message || 'Lỗi!');
+            megaStatusText.style.color = '#ef4444';
+            megaPhaseText.textContent = '⚠️ Thất bại';
+            megaStopBtn.style.display = 'none';
+            megaStartBtn.disabled = false;
+            megaStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'stopped') {
+            megaStopPolling();
+            megaStatusText.textContent = '⏹ ' + (data.message || 'Đã dừng.');
+            megaStatusText.style.color = '#f59e0b';
+            megaPhaseText.textContent = '⏸ Đã tạm dừng, có thể resume';
+            megaStopBtn.style.display = 'none';
+            megaStartBtn.disabled = false;
+            megaStartBtn.textContent = '▶️ Resume tải';
+        } else if (data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading') {
+            megaStartBtn.disabled = true;
+            megaStartBtn.textContent = '⏳ Đang chạy...';
+            megaStatusSection.style.display = 'block';
+            megaStatusText.style.color = '#3b82f6';
+            megaStopBtn.style.display = 'block';
+        }
+    }
+
+    function megaPollStatus() {
+        fetch('/api/mega/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) { megaUpdateStatusUI(data, false); })
+            .catch(function () { });
+    }
+
+    function megaRestoreStatus() {
+        fetch('/api/mega/status')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var hasLogs = data.logs && data.logs.length > 0;
+                var active = data.status === 'fetching_info' || data.status === 'downloading' || data.status === 'uploading';
+                var terminal = data.status === 'done' || data.status === 'error' || data.status === 'stopped';
+                if (!hasLogs && !active && !terminal) return;
+                megaStatusSection.style.display = 'block';
+                megaUpdateStatusUI(data, true);
+                if (active) megaStartPolling();
+            })
+            .catch(function () { });
+    }
+
+    function megaStop() {
+        fetch('/api/mega/stop', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                megaStopPolling();
+                megaStatusText.textContent = '⏹ Đã dừng bởi người dùng.';
+                megaStartBtn.disabled = false;
+                megaStartBtn.textContent = '🚀 Bắt đầu tải';
+            })
+            .catch(function (e) { alert('Lỗi: ' + e); });
+    }
+
+    function megaReset(deleteFiles) {
+        var confirmMsg = deleteFiles
+            ? 'Xóa toàn bộ file tạm Mega (.part) và trạng thái hiện tại? Sau đó sẽ tải lại từ đầu.'
+            : 'Xóa trạng thái/log Mega đang hiển thị? File .part để resume sẽ được giữ lại.';
+        if (!confirm(confirmMsg)) return;
+
+        fetch('/api/mega/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delete_files: !!deleteFiles })
+        })
+            .then(function (r) {
+                return r.json().then(function (data) {
+                    if (!r.ok) throw new Error(data.error || 'Reset thất bại');
+                    return data;
+                });
+            })
+            .then(function () {
+                megaStopPolling();
+                megaStatusSection.style.display = 'none';
+                megaStatusText.textContent = 'Đang xử lý...';
+                megaPhaseText.textContent = '';
+                megaProgressBar.style.width = '0%';
+                megaProgressPercent.textContent = '0%';
+                megaProgressDetail.textContent = '';
+                megaConsole.textContent = 'Đang chờ...';
+                megaLastLogCount = 0;
+                megaRenderedLogKey = '';
+                megaStartBtn.disabled = false;
+                megaStartBtn.textContent = '🚀 Bắt đầu tải';
+                megaStopBtn.style.display = 'none';
+                alert(deleteFiles ? 'Đã xóa trạng thái và file tạm.' : 'Đã xóa trạng thái.');
+            })
+            .catch(function (e) { alert('Lỗi: ' + e.message); });
+    }
+
+    megaCheckBtn.addEventListener('click', megaCheckInfo);
+    megaStartBtn.addEventListener('click', megaStart);
+    megaStopBtn.addEventListener('click', megaStop);
+    if (megaResetBtn) megaResetBtn.addEventListener('click', function () { megaReset(false); });
+    if (megaClearTempBtn) megaClearTempBtn.addEventListener('click', function () { megaReset(true); });
+
+    megaRestoreStatus();
+})();
+
 // ==================== QUEUE & POLLING ====================
 async function poll() {
     if (!isPolling) return;

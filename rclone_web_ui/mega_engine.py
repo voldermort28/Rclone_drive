@@ -1,0 +1,586 @@
+"""
+MegaEngine - Download public Mega.nz folders and upload to Google Drive.
+Uses raw Mega API + pycryptodome for decryption.
+Compatible with Python 3.6+.
+"""
+
+import base64
+import glob
+import json
+import logging
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util import Counter
+except ImportError:
+    AES = None
+
+
+class MegaEngine:
+    CHUNK_SIZE = 1024 * 1024
+    USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/135.0.0.0 Safari/537.36")
+    API_URL = "https://g.api.mega.co.nz/cs"
+
+    def __init__(self, progress_callback, log_callback, stop_checker, state_callback=None):
+        self.progress_callback = progress_callback
+        self.log_callback = log_callback
+        self.stop_checker = stop_checker
+        self.state_callback = state_callback
+        self._process = None
+        self._response = None
+        self._stopped = False
+        self._progress_base = 0
+        self._progress_span = 100
+        self._seq_id = int(time.time())
+
+    # ==================== HELPERS ====================
+
+    def _emit_state(self, **kwargs):
+        if self.state_callback:
+            try:
+                self.state_callback(kwargs)
+            except Exception:
+                pass
+
+    def _progress(self, percent, message):
+        overall = int(self._progress_base + (percent * self._progress_span / 100.0))
+        overall = max(0, min(100, overall))
+        self.progress_callback(overall, message)
+
+    @staticmethod
+    def _b64_url_decode(data):
+        data += '=' * ((4 - len(data) % 4) % 4)
+        return base64.urlsafe_b64decode(data)
+
+    @staticmethod
+    def _b64_url_encode(data):
+        return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+    @staticmethod
+    def _a32_to_str(a):
+        return struct.pack('>%dI' % len(a), *a)
+
+    @staticmethod
+    def _str_to_a32(b):
+        if isinstance(b, str):
+            b = b.encode('latin-1')
+        if len(b) % 4:
+            b += b'\x00' * (4 - len(b) % 4)
+        return list(struct.unpack('>%dI' % (len(b) // 4), b))
+
+    def _decrypt_key(self, enc_key_a32, master_key_a32):
+        """AES-ECB decrypt node key using folder master key."""
+        result = []
+        mk = self._a32_to_str(master_key_a32)
+        # Process in 4-int (16-byte) blocks
+        for i in range(0, len(enc_key_a32), 4):
+            block = enc_key_a32[i:i + 4]
+            if len(block) < 4:
+                # Pad short blocks
+                block = list(block) + [0] * (4 - len(block))
+            cipher = AES.new(mk, AES.MODE_ECB)
+            dec = self._str_to_a32(cipher.decrypt(self._a32_to_str(block)))
+            result.extend(dec)
+        return result
+
+    def _decrypt_attr(self, attr_b64, key_a32):
+        """AES-CBC decrypt node attributes to get filename etc."""
+        try:
+            attr_bytes = self._b64_url_decode(attr_b64)
+        except Exception:
+            return {}
+        # For file nodes: key is 8 ints, derive AES key by XOR
+        if len(key_a32) >= 8:
+            aes_key = [
+                key_a32[0] ^ key_a32[4], key_a32[1] ^ key_a32[5],
+                key_a32[2] ^ key_a32[6], key_a32[3] ^ key_a32[7]
+            ]
+        else:
+            aes_key = list(key_a32[:4])
+        try:
+            cipher = AES.new(self._a32_to_str(aes_key), AES.MODE_CBC, b'\x00' * 16)
+            attr_dec = cipher.decrypt(attr_bytes)
+            attr_str = attr_dec.decode('utf-8', errors='ignore')
+        except Exception:
+            return {}
+        if 'MEGA{' in attr_str:
+            start = attr_str.index('MEGA{') + 4
+            try:
+                depth = 0
+                end = start
+                for i in range(start, len(attr_str)):
+                    if attr_str[i] == '{':
+                        depth += 1
+                    elif attr_str[i] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+                return json.loads(attr_str[start:end])
+            except Exception:
+                return {}
+        return {}
+
+    def _api_request(self, data, folder_id=None):
+        """Send request to Mega API."""
+        params = {'id': self._seq_id}
+        self._seq_id += 1
+        if folder_id:
+            params['n'] = folder_id
+        resp = requests.post(self.API_URL, params=params,
+                             data=json.dumps([data]),
+                             headers={'Content-Type': 'application/json'},
+                             timeout=60)
+        result = resp.json()
+        if isinstance(result, int):
+            raise Exception("Mega API error code: {0}".format(result))
+        if isinstance(result, list) and len(result) > 0:
+            return result[0]
+        return result
+
+    @staticmethod
+    def _human_size(size):
+        try:
+            size = float(size)
+        except Exception:
+            return ''
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024.0:
+                return "{0:.2f} {1}".format(size, unit)
+            size /= 1024.0
+        return "{0:.2f} PB".format(size)
+
+    @staticmethod
+    def _safe_name(name):
+        name = (name or '').strip()
+        name = re.sub(r'[\\/*?:"<>|]', '_', name)
+        return name or 'mega_download'
+
+    def _detect_binary(self):
+        env_binary = os.environ.get('RCLONE_BINARY', '')
+        if env_binary:
+            return env_binary
+        for path in ['/usr/local/bin/gclone', '/usr/bin/gclone']:
+            if os.path.isfile(path):
+                return path
+        try:
+            result = subprocess.run(['which', 'gclone'],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            path = result.stdout.decode('utf-8', errors='replace').strip()
+            if path and os.path.isfile(path):
+                return path
+        except Exception:
+            pass
+        return 'rclone'
+
+    def _get_sa_dir(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sa_dir = os.path.join(base_dir, 'sa')
+        if os.path.isdir(sa_dir) and glob.glob(os.path.join(sa_dir, '*.json')):
+            return sa_dir
+        return None
+
+    def _cmd_for_subprocess(self, cmd):
+        if sys.getfilesystemencoding().lower() == 'ascii':
+            return [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
+        return cmd
+
+    def _path_for_io(self, path):
+        if isinstance(path, bytes):
+            return path
+        if sys.getfilesystemencoding().lower() == 'ascii':
+            return path.encode('utf-8')
+        return path
+
+    # ==================== MEGA FOLDER PARSING ====================
+
+    def parse_folder_url(self, url):
+        """Parse mega.nz folder URL into (folder_id, folder_key_a32)."""
+        url = (url or '').strip()
+        # New format: mega.nz/folder/ID#KEY
+        m = re.match(r'https?://mega\.nz/folder/([^#]+)#(.+)', url)
+        if m:
+            folder_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            return folder_id, self._str_to_a32(key_bytes)
+        # Old format: mega.nz/#F!ID!KEY
+        m = re.match(r'https?://mega\.nz/#F!([^!]+)!(.+)', url)
+        if m:
+            folder_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            return folder_id, self._str_to_a32(key_bytes)
+        return None, None
+
+    def get_folder_info(self, url):
+        """Get folder contents: list of files with names, sizes, tree structure."""
+        if requests is None:
+            return {'error': "Module 'requests' not installed."}
+        if AES is None:
+            return {'error': "Module 'pycryptodome' not installed."}
+
+        folder_id, folder_key = self.parse_folder_url(url)
+        if not folder_id or not folder_key:
+            return {'error': 'Link Mega.nz không hợp lệ. Cần dạng https://mega.nz/folder/ID#KEY'}
+
+        try:
+            data = self._api_request({'a': 'f', 'c': 1, 'ca': 1, 'r': 1}, folder_id)
+        except Exception as e:
+            return {'error': 'Mega API lỗi: {0}'.format(str(e))}
+
+        if not isinstance(data, dict) or 'f' not in data:
+            return {'error': 'Mega API trả về dữ liệu không hợp lệ.'}
+
+        raw_nodes = data['f']
+        nodes = []
+        root_handle = None
+
+        for node in raw_nodes:
+            h = node.get('h', '')
+            t = node.get('t', -1)
+            s = node.get('s', 0)
+            k_str = node.get('k', '')
+            a_str = node.get('a', '')
+            p = node.get('p', '')
+
+            name = ''
+            node_key = []
+            try:
+                enc_key_b64 = k_str.split(':')[1] if ':' in k_str else k_str
+                enc_key_bytes = self._b64_url_decode(enc_key_b64)
+                enc_key_a32 = self._str_to_a32(enc_key_bytes)
+                node_key = self._decrypt_key(enc_key_a32, folder_key)
+                attrs = self._decrypt_attr(a_str, node_key)
+                name = attrs.get('n', '')
+            except Exception:
+                name = 'file_{0}'.format(h)
+
+            if t == 2:
+                root_handle = h
+                continue
+
+            nodes.append({
+                'handle': h,
+                'parent': p,
+                'type': 'dir' if t == 1 else 'file',
+                'name': self._safe_name(name) if name else 'file_{0}'.format(h),
+                'size': s,
+                'size_human': self._human_size(s) if s else '',
+                'key_a32': node_key,
+            })
+
+        # Build tree paths
+        handle_map = {n['handle']: n for n in nodes}
+        if root_handle:
+            handle_map[root_handle] = {'handle': root_handle, 'type': 'root', 'name': '', 'parent': ''}
+
+        def get_path(node):
+            parts = []
+            current = node
+            seen = set()
+            while current:
+                if current['handle'] in seen:
+                    break
+                seen.add(current['handle'])
+                if current.get('type') == 'root':
+                    break
+                parts.append(current['name'])
+                current = handle_map.get(current.get('parent'))
+            parts.reverse()
+            return '/'.join(parts[:-1]) if len(parts) > 1 else ''
+
+        # Find root folder name
+        root_name = 'Mega Folder'
+        for n in nodes:
+            if n['parent'] == root_handle and n['type'] == 'dir':
+                root_name = n['name']
+                break
+        if root_handle:
+            for n in nodes:
+                if n['parent'] == root_handle and n['type'] == 'file':
+                    root_name = 'Mega Folder'
+                    break
+
+        files = []
+        for n in nodes:
+            if n['type'] == 'file':
+                rel_dir = get_path(n)
+                files.append({
+                    'handle': n['handle'],
+                    'name': n['name'],
+                    'size': n['size'],
+                    'size_human': n['size_human'],
+                    'rel_dir': rel_dir,
+                    'key_a32': n['key_a32'],
+                })
+
+        total_size = sum(f['size'] for f in files)
+        return {
+            'success': True,
+            'folder_name': root_name,
+            'folder_id': folder_id,
+            'folder_key': folder_key,
+            'file_count': len(files),
+            'total_size': total_size,
+            'total_size_human': self._human_size(total_size),
+            'files': files,
+        }
+
+    # ==================== DOWNLOAD ====================
+
+    def _get_download_url(self, node_handle, folder_id):
+        """Get temporary download URL for a file node."""
+        data = self._api_request({'a': 'g', 'g': 1, 'n': node_handle}, folder_id)
+        if isinstance(data, dict) and 'g' in data:
+            return data['g']
+        if isinstance(data, int) and data == -18:
+            raise Exception("Mega quota exceeded. Chờ vài giờ rồi thử lại.")
+        raise Exception("Không lấy được link tải Mega: {0}".format(data))
+
+    def _download_and_decrypt(self, dl_url, key_a32, dest_path, file_size=0):
+        """Download file from Mega, decrypt with AES-CTR, save to disk."""
+        # For file nodes with 8-int key: derive AES key and IV
+        if len(key_a32) >= 8:
+            aes_key = [key_a32[0] ^ key_a32[4], key_a32[1] ^ key_a32[5],
+                       key_a32[2] ^ key_a32[6], key_a32[3] ^ key_a32[7]]
+            iv = [key_a32[4], key_a32[5]]
+        else:
+            aes_key = list(key_a32[:4])
+            iv = [0, 0]
+
+        # Build AES-CTR cipher
+        iv_bytes = self._a32_to_str(iv)
+        initial_value = struct.unpack('>Q', iv_bytes)[0] << 64
+        ctr = Counter.new(128, initial_value=initial_value)
+        cipher = AES.new(self._a32_to_str(aes_key), AES.MODE_CTR, counter=ctr)
+
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        dest_io = self._path_for_io(dest_path)
+
+        self._response = requests.get(dl_url, stream=True, timeout=60,
+                                      headers={'User-Agent': self.USER_AGENT})
+        if not self._response.ok:
+            raise Exception("Download HTTP {0}".format(self._response.status_code))
+
+        downloaded = 0
+        last_emit = 0
+        with open(dest_io, 'wb') as f:
+            for chunk in self._response.iter_content(chunk_size=self.CHUNK_SIZE):
+                if self.stop_checker() or self._stopped:
+                    return False
+                if not chunk:
+                    continue
+                decrypted = cipher.decrypt(chunk)
+                f.write(decrypted)
+                downloaded += len(chunk)
+                now = time.time()
+                if now - last_emit >= 1:
+                    pct = int(downloaded * 50 / file_size) if file_size else 5
+                    pct = max(2, min(50, pct))
+                    self._progress(pct, "Downloading: {0}".format(self._human_size(downloaded)))
+                    last_emit = now
+
+        # Truncate to actual file size (AES padding may add extra bytes)
+        if file_size > 0:
+            actual = os.path.getsize(dest_io)
+            if actual > file_size:
+                with open(dest_io, 'r+b') as f:
+                    f.truncate(file_size)
+
+        self._response = None
+        return True
+
+    # ==================== UPLOAD ====================
+
+    def upload_to_drive(self, local_path, drive_dest):
+        """Upload local file/dir to Google Drive via rclone/gclone."""
+        binary = self._detect_binary()
+        dest = drive_dest
+        m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', drive_dest)
+        if m:
+            dest = "{0}:{{{1}}}{2}".format(m.group(1), m.group(2), m.group(3) or '')
+
+        cmd = [binary, "copy", local_path, dest, "--verbose", "--stats=1s", "--stats-one-line"]
+        sa_dir = self._get_sa_dir()
+        if sa_dir:
+            sa_count = len(glob.glob(os.path.join(sa_dir, '*.json')))
+            cmd.extend(["--drive-service-account-file-path", sa_dir])
+            self.log_callback(logging.INFO, "SA rotation enabled: {0} accounts".format(sa_count))
+
+        self.log_callback(logging.INFO, "Uploading to Google Drive: {0}".format(dest))
+
+        try:
+            self._process = subprocess.Popen(
+                self._cmd_for_subprocess(cmd),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
+            )
+            progress_regex = re.compile(r'(\d+)%')
+            if self._process and self._process.stdout:
+                for raw_line in self._process.stdout:
+                    line = raw_line.decode('utf-8', errors='replace').strip()
+                    if not line:
+                        continue
+                    self.log_callback(logging.DEBUG, line)
+                    match = progress_regex.search(line)
+                    if match:
+                        rclone_percent = int(match.group(1))
+                        overall = 50 + int(rclone_percent * 50 / 100)
+                        self._progress(overall, "Uploading: {0}%".format(rclone_percent))
+                    if self.stop_checker() or self._stopped:
+                        self.log_callback(logging.WARNING, "Upload stopped by user.")
+                        self._process.terminate()
+                        return False
+                self._process.wait()
+                if self._process.returncode == 0:
+                    self.log_callback(logging.INFO, "Upload Google Drive OK!")
+                    return True
+                self.log_callback(logging.ERROR, "Rclone exit code {0}".format(self._process.returncode))
+                return False
+        except FileNotFoundError:
+            self.log_callback(logging.ERROR, "gclone/rclone not found.")
+            return False
+        except Exception as e:
+            self.log_callback(logging.ERROR, "Upload error: {0}".format(str(e)))
+            return False
+        finally:
+            self._process = None
+
+    def cleanup(self, path):
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            self.log_callback(logging.INFO, "Cleaned: {0}".format(path))
+        except Exception as e:
+            self.log_callback(logging.WARNING, "Cleanup error: {0}".format(str(e)))
+
+    # ==================== FULL PIPELINE ====================
+
+    def run_full_pipeline(self, url, drive_dest):
+        """Download entire Mega folder → upload to GDrive file by file."""
+        self._stopped = False
+        try:
+            self.log_callback(logging.INFO, "=" * 50)
+            self.log_callback(logging.INFO, "STEP 1/3: Fetching Mega folder info...")
+            self._emit_state(status='fetching_info', phase='info')
+            self._progress(0, "Reading Mega folder...")
+
+            info = self.get_folder_info(url)
+            if 'error' in info:
+                self.log_callback(logging.ERROR, info['error'])
+                return False
+
+            files = info.get('files', [])
+            total_items = len(files)
+            folder_name = info.get('folder_name', 'Mega Folder')
+            folder_id = info.get('folder_id', '')
+            if not total_items:
+                self.log_callback(logging.ERROR, "Folder is empty.")
+                return False
+
+            self._emit_state(total_items=total_items, current_index=0)
+            self.log_callback(logging.INFO, "Folder: {0} ({1} files, {2})".format(
+                folder_name, total_items, info.get('total_size_human', '')))
+
+            for index, fobj in enumerate(files, 1):
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                span = 100.0 / total_items
+                self._progress_base = (index - 1) * span
+                self._progress_span = span
+
+                fname = fobj.get('name', 'file')
+                fsize = fobj.get('size', 0)
+                rel_dir = fobj.get('rel_dir', '')
+
+                self._emit_state(current_index=index, total_items=total_items,
+                                 file_name=fname, file_size=fsize,
+                                 file_size_human=fobj.get('size_human', ''))
+                self.log_callback(logging.INFO, "=" * 50)
+                self.log_callback(logging.INFO, "File {0}/{1}: {2} ({3})".format(
+                    index, total_items, fname, fobj.get('size_human', '')))
+
+                # Step 2: Download + decrypt
+                self.log_callback(logging.INFO, "STEP 2/3: Downloading from Mega...")
+                self._emit_state(status='downloading', phase='download')
+
+                try:
+                    dl_url = self._get_download_url(fobj['handle'], folder_id)
+                except Exception as e:
+                    self.log_callback(logging.ERROR, str(e))
+                    return False
+
+                # Build local path preserving folder structure
+                if rel_dir:
+                    tmp_dir = os.path.join('/tmp', 'mega_dl', rel_dir)
+                else:
+                    tmp_dir = os.path.join('/tmp', 'mega_dl')
+                local_path = os.path.join(tmp_dir, fname)
+
+                ok = self._download_and_decrypt(dl_url, fobj['key_a32'], local_path, fsize)
+                if not ok:
+                    return False
+                self.log_callback(logging.INFO, "Downloaded to VPS: {0}".format(local_path))
+
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                # Step 3: Upload to GDrive
+                self.log_callback(logging.INFO, "STEP 3/3: Uploading to Google Drive...")
+                self._emit_state(status='uploading', phase='upload')
+                self._progress(50, "Starting upload...")
+
+                if rel_dir:
+                    item_dest = drive_dest.rstrip('/') + '/' + rel_dir
+                else:
+                    item_dest = drive_dest
+
+                success = self.upload_to_drive(local_path, item_dest)
+                if not success:
+                    return False
+
+                # Cleanup this file immediately to save disk
+                self.cleanup(local_path)
+
+            # Final cleanup
+            mega_tmp = '/tmp/mega_dl'
+            if os.path.exists(mega_tmp):
+                self.cleanup(mega_tmp)
+
+            self._progress_base = 0
+            self._progress_span = 100
+            self._emit_state(status='done', phase='done',
+                             current_index=total_items, total_items=total_items)
+            self._progress(100, "Done!")
+            return True
+        except Exception as e:
+            self.log_callback(logging.ERROR, "Pipeline error: {0}".format(str(e)))
+            return False
+
+    def stop(self):
+        self._stopped = True
+        if self._response:
+            try:
+                self._response.close()
+            except Exception:
+                pass
+        if self._process:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass

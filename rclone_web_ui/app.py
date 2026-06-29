@@ -1429,5 +1429,200 @@ def mediafire_reset():
     return jsonify({'success': True, 'message': 'Đã reset trạng thái MediaFire', 'deleted_files': deleted})
 
 
+# ==================== MEGA MODULE (Completely Isolated) ====================
+from mega_engine import MegaEngine
+
+MEGA_TMP_ROOT = '/tmp/mega_dl'
+
+mega_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
+}
+_mega_engine = None
+
+
+def _reset_mega_state():
+    mega_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+
+def _mega_progress(percent, message):
+    mega_state['progress'] = percent
+    mega_state['message'] = message
+
+
+def _mega_state_update(values):
+    for key, value in values.items():
+        if key in mega_state:
+            mega_state[key] = value
+
+
+def _mega_log(level, message):
+    mega_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(mega_state['logs']) > 200:
+        mega_state['logs'] = mega_state['logs'][-200:]
+    logging.log(level, "[MEGA] %s", message)
+
+
+def _mega_stop_checker():
+    return mega_state.get('stop_flag', False)
+
+
+@app.route('/api/mega/info', methods=['POST'])
+def mega_info():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Mega.nz'})
+
+    engine = MegaEngine(lambda percent, message: None,
+                        lambda level, message: None,
+                        _mega_stop_checker)
+    info = engine.get_folder_info(url)
+    if 'error' in info:
+        return jsonify({'success': False, 'error': info['error']})
+    return jsonify(info)
+
+
+@app.route('/api/mega/start', methods=['POST'])
+def mega_start():
+    global _mega_engine
+
+    if mega_state['status'] in ('fetching_info', 'downloading', 'uploading'):
+        return jsonify({'success': False, 'error': 'Đang có tiến trình Mega đang chạy. Vui lòng đợi hoặc dừng trước.'})
+
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    dest = data.get('destination', '').strip()
+
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link Mega.nz'})
+    if not dest:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
+
+    dest_converted = dest
+    if 'drive.google.com' in dest:
+        fid = extract_drive_id(dest)
+        if fid:
+            dest_converted = 'gc:' + fid
+
+    mega_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Mega...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+    _mega_engine = MegaEngine(_mega_progress, _mega_log, _mega_stop_checker, _mega_state_update)
+
+    def _run_pipeline():
+        try:
+            success = _mega_engine.run_full_pipeline(url, dest_converted)
+            if _mega_stop_checker():
+                mega_state['status'] = 'stopped'
+                mega_state['message'] = 'Đã dừng bởi người dùng.'
+            elif success:
+                mega_state['status'] = 'done'
+                mega_state['phase'] = 'done'
+                mega_state['message'] = 'Hoàn tất! File từ Mega đã được copy lên Google Drive.'
+                mega_state['progress'] = 100
+            else:
+                mega_state['status'] = 'error'
+                mega_state['phase'] = 'error'
+                if not mega_state['message']:
+                    mega_state['message'] = 'Tải từ Mega thất bại. Xem console để biết chi tiết.'
+        except Exception as e:
+            mega_state['status'] = 'error'
+            mega_state['phase'] = 'error'
+            mega_state['message'] = 'Lỗi: {0}'.format(str(e))
+
+    t = threading.Thread(target=_run_pipeline, daemon=True)
+    t.start()
+    return jsonify({'success': True, 'message': 'Đã bắt đầu tải Mega'})
+
+
+@app.route('/api/mega/status', methods=['GET'])
+def mega_status():
+    return jsonify({
+        'status': mega_state['status'],
+        'progress': mega_state['progress'],
+        'message': mega_state['message'],
+        'file_name': mega_state['file_name'],
+        'file_size': mega_state['file_size'],
+        'file_size_human': mega_state['file_size_human'],
+        'phase': mega_state['phase'],
+        'current_index': mega_state.get('current_index', 0),
+        'total_items': mega_state.get('total_items', 0),
+        'logs': mega_state['logs'][-50:],
+    })
+
+
+@app.route('/api/mega/stop', methods=['POST'])
+def mega_stop():
+    global _mega_engine
+    mega_state['stop_flag'] = True
+    if _mega_engine:
+        _mega_engine.stop()
+    mega_state['status'] = 'stopped'
+    mega_state['message'] = 'Đã dừng bởi người dùng.'
+    return jsonify({'success': True})
+
+
+@app.route('/api/mega/reset', methods=['POST'])
+def mega_reset():
+    global _mega_engine
+    data = request.get_json(force=True, silent=True) or {}
+    delete_files = bool(data.get('delete_files', False))
+    active = mega_state.get('status') in ('fetching_info', 'downloading', 'uploading')
+
+    if active:
+        return jsonify({'success': False, 'error': 'Tiến trình Mega đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
+
+    deleted = False
+    if delete_files and os.path.exists(MEGA_TMP_ROOT):
+        try:
+            shutil.rmtree(MEGA_TMP_ROOT, ignore_errors=True)
+            deleted = True
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    if _mega_engine:
+        _mega_engine.stop()
+    _mega_engine = None
+    _reset_mega_state()
+    return jsonify({'success': True, 'message': 'Đã reset trạng thái Mega', 'deleted_files': deleted})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, threaded=True)

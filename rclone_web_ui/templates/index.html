@@ -76,6 +76,12 @@
                 </svg>
                 MediaFire
             </button>
+            <button class="tab-btn" data-tab="mega">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+                </svg>
+                Mega
+            </button>
             <button class="tab-btn" data-tab="history">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
@@ -708,6 +714,94 @@
                         Xóa trạng thái
                     </button>
                     <button id="mediafireClearTempBtn" class="btn-secondary"
+                        style="flex: 1; border-color: #ef4444; color: #ef4444;">
+                        Xóa file tạm
+                    </button>
+                </div>
+            </section>
+        </div>
+
+        <div class="tab-content" id="tab-mega">
+            <section class="card input-section" id="megaIntroSection">
+                <div class="config-header" style="margin-bottom: 15px;">
+                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
+                            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+                        </svg> Mega.nz → Google Drive</h3>
+                    <p class="config-desc">Tải thư mục public từ Mega.nz về VPS và tự động đẩy lên Google Drive.</p>
+                </div>
+                <div style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
+                    Nhập link shared folder của Mega.nz (dạng <code>https://mega.nz/folder/ID#KEY</code>). Hệ thống sẽ tự động phân tích và tải tất cả các file bên trong trong khi vẫn giữ nguyên cấu trúc cây thư mục.
+                </div>
+            </section>
+
+            <section class="card input-section">
+                <div class="input-group">
+                    <label for="megaUrl">Link Mega Thư Mục</label>
+                    <input type="text" id="megaUrl" placeholder="https://mega.nz/folder/ID#KEY..." autocomplete="off">
+                </div>
+
+                <div id="megaFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: 500;" id="megaFileName">—</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="megaFileSize">—</div>
+                        </div>
+                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="megaDest">Destination Google Drive (Nơi nhận)</label>
+                    <input type="text" id="megaDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button id="megaCheckBtn" class="btn-secondary" style="flex: 1;">
+                        🔍 Kiểm tra link
+                    </button>
+                    <button id="megaStartBtn" class="btn-primary" style="flex: 2;">
+                        🚀 Bắt đầu tải
+                    </button>
+                </div>
+            </section>
+
+            <section class="card status-section" id="megaStatusSection" style="display: none;">
+                <div class="status-header">
+                    <h3 id="megaStatusText">Đang xử lý...</h3>
+                    <span id="megaPhaseText" class="file-name" style="font-size: 0.85rem;"></span>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="megaProgressBar"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="megaProgressPercent">0%</span>
+                        <span id="megaProgressDetail"></span>
+                    </div>
+                </div>
+
+                <div class="console-container"
+                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
+                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
+                        >_ Mega Console
+                    </div>
+                    <div id="megaConsole"
+                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
+                        Đang chờ...
+                    </div>
+                </div>
+
+                <button id="megaStopBtn" class="btn-secondary"
+                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
+                    ⏹ Dừng tiến trình
+                </button>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="megaResetBtn" class="btn-secondary" style="flex: 1;">
+                        Xóa trạng thái
+                    </button>
+                    <button id="megaClearTempBtn" class="btn-secondary"
                         style="flex: 1; border-color: #ef4444; color: #ef4444;">
                         Xóa file tạm
                     </button>
