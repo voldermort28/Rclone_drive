@@ -338,6 +338,25 @@
                 </div>
                 <div id="fshareConfigStatus" class="config-status"></div>
             </section>
+
+            <!-- Terabox Cookie Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;" id="teraboxCookieSection">
+                <div class="config-header">
+                    <h3>🍪 Cookie Terabox</h3>
+                    <p class="config-desc">Cấu hình cookie <code>ndus</code> để tải file từ Terabox về VPS.</p>
+                </div>
+                <div style="padding: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; margin-bottom: 15px; font-size: 0.85rem; color: #fbbf24;">
+                    Mở <a href="https://www.terabox.app" target="_blank" style="color: #38bdf8;">terabox.app</a> → Đăng nhập → F12 → Application → Cookies → copy giá trị <code>ndus</code>
+                </div>
+                <div class="input-group">
+                    <label for="teraboxCookie">Cookie ndus</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="password" id="teraboxCookie" placeholder="Paste giá trị ndus cookie ở đây..." style="flex: 1;">
+                        <button id="teraboxSaveCookieBtn" class="btn-primary" style="padding: 8px 20px; white-space: nowrap;">💾 Lưu</button>
+                    </div>
+                </div>
+                <div id="teraboxCookieStatus" class="config-status"></div>
+            </section>
         </div>
 
         <!-- ========== TAB: HISTORY & QUEUE ========== -->
@@ -441,8 +460,8 @@
 
         <!-- ========== TAB: TERABOX ========== -->
         <div class="tab-content" id="tab-terabox">
-            <!-- Card 1: Cookie Config -->
-            <section class="card input-section" id="teraboxCookieSection">
+            <!-- Card 1: Intro & status -->
+            <section class="card input-section" id="teraboxIntroSection">
                 <div class="config-header" style="margin-bottom: 15px;">
                     <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
@@ -452,17 +471,8 @@
                         </svg> Terabox → Google Drive</h3>
                     <p class="config-desc">Tải file từ Terabox về VPS rồi tự động đẩy lên Google Drive.</p>
                 </div>
-                <div style="padding: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; margin-bottom: 15px; font-size: 0.85rem; color: #fbbf24;">
-                    🍪 <strong>Cookie Terabox:</strong> Cần cookie <code>ndus</code> để tải file.
-                    Mở <a href="https://www.terabox.app" target="_blank" style="color: #38bdf8;">terabox.app</a> → Đăng nhập → F12 → Application → Cookies → copy giá trị <code>ndus</code>
-                </div>
-                <div class="input-group">
-                    <label for="teraboxCookie">Cookie ndus</label>
-                    <div style="display: flex; gap: 8px;">
-                        <input type="password" id="teraboxCookie" placeholder="Paste giá trị ndus cookie ở đây..." style="flex: 1;">
-                        <button id="teraboxSaveCookieBtn" class="btn-primary" style="padding: 8px 20px; white-space: nowrap;">💾 Lưu</button>
-                    </div>
-                    <div id="teraboxCookieStatus" style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);"></div>
+                <div id="teraboxAccountStatus" style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
+                    Đang kiểm tra cấu hình Terabox...
                 </div>
             </section>
 

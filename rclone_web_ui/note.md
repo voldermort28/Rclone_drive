@@ -61,3 +61,12 @@ Tất cả các Engine tải file (đơn và thư mục) phải tuân thủ nghi
   * Các ô nhập link (URL) ở UI sẽ được đổi thành `<textarea>` cho phép nhập nhiều link (mỗi dòng 1 link).
   * Backend phải bóc tách danh sách link, mở rộng các link thư mục thành danh sách file riêng biệt, sau đó chạy tải tuần tự qua vòng lặp.
 * **Xử lý tên file mã hóa**: Đặc biệt đối với tab **Mega**, cần giải mã đúng khóa phân quyền (`k_str`) bằng cách phân tách dấu `/` trước để tìm đúng phân quyền của `root_handle`, tránh sinh ra các file lỗi bắt đầu bằng `file_`.
+
+---
+
+## 5. CẤU HÌNH HỆ THỐNG ĐỒNG NHẤT (UNIFIED CONFIGURATION)
+
+Để giữ cho giao diện tải sạch sẽ, trực quan và tập trung hoàn toàn vào việc hiển thị tiến trình tải/log:
+* **Gom cụm cấu hình**: Tất cả các phần thiết lập thông tin xác thực, tài khoản hay khóa kết nối (bao gồm Rclone config, Service Accounts zip, Tài khoản VIP Fshare, và Cookie Terabox ndus) phải được quy hoạch gọn gàng trong duy nhất tab **Cấu hình** (`tab-config`).
+* **Không đặt input cấu hình ở tab tải**: Các tab tải tương ứng (như Fshare, Terabox) tuyệt đối không chứa form nhập liệu hoặc nút lưu cấu hình. Thay vào đó, chúng chỉ hiển thị một block thông tin nhỏ báo trạng thái cấu hình hiện tại (ví dụ: đã nhận diện cấu hình hay chưa) để hướng dẫn người dùng qua tab Cấu hình nếu cần cấu hình lại.
+

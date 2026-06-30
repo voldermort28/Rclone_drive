@@ -2296,6 +2296,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     var tbCookieInput = document.getElementById('teraboxCookie');
     var tbSaveCookieBtn = document.getElementById('teraboxSaveCookieBtn');
     var tbCookieStatus = document.getElementById('teraboxCookieStatus');
+    var tbAccountStatus = document.getElementById('teraboxAccountStatus');
     var tbUrlInput = document.getElementById('teraboxUrl');
     var tbDestInput = document.getElementById('teraboxDest');
     var tbCheckBtn = document.getElementById('teraboxCheckBtn');
@@ -2333,16 +2334,40 @@ window.addEventListener('DOMContentLoaded', async () => {
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.has_cookie) {
-                    tbCookieStatus.innerHTML = '✅ Cookie đã lưu (<code>' + data.masked + '</code>)';
-                    tbCookieStatus.style.color = '#22c55e';
+                    if (tbCookieStatus) {
+                        tbCookieStatus.innerHTML = '✅ Cookie đã lưu (<code>' + data.masked + '</code>)';
+                        tbCookieStatus.style.color = '#22c55e';
+                    }
+                    if (tbAccountStatus) {
+                        tbAccountStatus.innerHTML = '✅ Cookie Terabox ndus đã được lưu. Sẵn sàng tải file.';
+                        tbAccountStatus.style.color = '#22c55e';
+                        tbAccountStatus.style.borderColor = 'rgba(34,197,94,.35)';
+                        tbAccountStatus.style.background = 'rgba(34,197,94,.1)';
+                    }
                 } else {
-                    tbCookieStatus.innerHTML = '⚠️ Chưa có cookie. Vui lòng nhập và lưu.';
-                    tbCookieStatus.style.color = '#f59e0b';
+                    if (tbCookieStatus) {
+                        tbCookieStatus.innerHTML = '⚠️ Chưa có cookie. Vui lòng nhập và lưu.';
+                        tbCookieStatus.style.color = '#f59e0b';
+                    }
+                    if (tbAccountStatus) {
+                        tbAccountStatus.innerHTML = '⚠️ Chưa cấu hình Cookie Terabox ndus. Vui lòng cấu hình ở tab <strong>Cấu hình</strong>.';
+                        tbAccountStatus.style.color = '#f59e0b';
+                        tbAccountStatus.style.borderColor = 'rgba(245,158,11,.35)';
+                        tbAccountStatus.style.background = 'rgba(245,158,11,.1)';
+                    }
                 }
             })
             .catch(function () {
-                tbCookieStatus.textContent = '❌ Không thể kiểm tra cookie.';
-                tbCookieStatus.style.color = '#ef4444';
+                if (tbCookieStatus) {
+                    tbCookieStatus.textContent = '❌ Không thể kiểm tra cookie.';
+                    tbCookieStatus.style.color = '#ef4444';
+                }
+                if (tbAccountStatus) {
+                    tbAccountStatus.textContent = '❌ Không thể kiểm tra cookie. Vui lòng kiểm tra lại cấu hình.';
+                    tbAccountStatus.style.color = '#ef4444';
+                    tbAccountStatus.style.borderColor = 'rgba(239,68,68,.35)';
+                    tbAccountStatus.style.background = 'rgba(239,68,68,.1)';
+                }
             });
     }
 
