@@ -40,6 +40,12 @@ class TeraboxEngine:
         self._response = None  # for cancelling download stream
         self._stopped = False
         self._download_error = ''
+        self._progress_base = 0.0
+        self._progress_span = 100.0
+
+    def _progress(self, percent, message):
+        overall = self._progress_base + (float(percent) * self._progress_span / 100.0)
+        self.progress_callback(overall, message)
 
     # ==================== BINARY DETECTION (copied from rclone_engine) ====================
 
@@ -156,6 +162,39 @@ class TeraboxEngine:
             key_source = 'surl=' + surl
         key = hashlib.sha1(key_source.encode('utf-8')).hexdigest()[:24]
         return os.path.join('/tmp', 'terabox_dl', key)
+
+    def _scan_gdrive_existing(self, drive_dest):
+        """Scan GDrive destination, return set((filename, size))."""
+        existing = set()
+        try:
+            dest = drive_dest
+            m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', drive_dest)
+            if m:
+                dest = "{0}:{{{1}}}{2}".format(m.group(1), m.group(2), m.group(3) or '')
+            binary = self._detect_binary()
+            cmd = [binary, "lsjson", "-R", "--files-only", dest]
+            sa_dir = self._get_sa_dir()
+            if sa_dir:
+                cmd.extend(["--drive-service-account-file-path", sa_dir])
+            p = subprocess.Popen(
+                self._cmd_for_subprocess(cmd),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = p.communicate(timeout=60)
+            if p.returncode == 0:
+                data = json.loads(stdout.decode('utf-8', errors='replace'))
+                for item in data:
+                    path = item.get('Path', '')
+                    size = item.get('Size', 0)
+                    if path:
+                        norm = path.replace('\\', '/').strip('/')
+                        existing.add((norm, size))
+                self.log_callback(logging.INFO,
+                    "GDrive scan: tim thay {0} file da co.".format(len(existing)))
+        except Exception as e:
+            self.log_callback(logging.WARNING,
+                "Khong the quet GDrive: {0}".format(e))
+        return existing
 
     def _write_resume_meta(self, tmp_dir, meta):
         try:
@@ -732,7 +771,7 @@ class TeraboxEngine:
                                 self._human_size(file_size),
                                 speed_str, eta_str
                             )
-                            self.progress_callback(dl_percent, msg)
+                            self._progress(dl_percent, msg)
                             self.log_callback(logging.DEBUG, msg)
 
                             last_progress_time = now
@@ -819,9 +858,8 @@ class TeraboxEngine:
                     match = progress_regex.search(line)
                     if match:
                         rclone_percent = int(match.group(1))
-                        # Map rclone 0-100% to overall 50-100%
                         overall = 50 + int(rclone_percent * 50 / 100)
-                        self.progress_callback(overall, "Uploading: {0}%".format(rclone_percent))
+                        self._progress(overall, "Uploading: {0}%".format(rclone_percent))
                     elif "Transferred:" in line and " / " in line:
                         self.log_callback(logging.INFO, line)
                     elif "Errors:" in line:
@@ -868,105 +906,148 @@ class TeraboxEngine:
 
     def run_full_pipeline(self, url, cookie, drive_dest):
         """Run the complete Terabox -> Google Drive pipeline.
-        
+        Supports multi-URL input (one URL per line in textarea).
         Returns: True on success, False on failure.
         """
         self._stopped = False
-        tmp_dir = self._resume_dir_for_url(url)
         max_attempts = 4
-        local_path = None
 
         try:
-            # Phase 1: Get file info
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 1/3: Lấy thông tin file...")
-            self._emit_state(status='fetching_info', phase='info')
-            self.progress_callback(0, "Đang lấy thông tin file...")
-
-            info = self.get_file_info(url, cookie)
-            if "error" in info:
-                self.log_callback(logging.ERROR, info["error"])
+            # Parse multi-URL input
+            if isinstance(url, list):
+                urls = [u.strip() for u in url if u.strip()]
+            else:
+                urls = [u.strip() for u in (url or '').splitlines() if u.strip()]
+            if not urls:
+                self.log_callback(logging.ERROR, "Khong co link Terabox nao.")
                 return False
 
-            file_name = info["file_name"]
-            file_size = info["file_size"]
-            download_url = info.get("download_url", "")
-            self._emit_state(
-                file_name=file_name,
-                file_size=file_size,
-                file_size_human=info["file_size_human"],
-                phase='info'
-            )
+            total_urls = len(urls)
+            self._emit_state(total_items=total_urls, current_index=0)
 
-            self.log_callback(logging.INFO,
-                              "File: {0} ({1})".format(file_name, info["file_size_human"]))
+            # Step 0: GDrive pre-scan (1 lan duy nhat)
+            self.log_callback(logging.INFO, "Kiem tra file da co tren Google Drive...")
+            existing_files = self._scan_gdrive_existing(drive_dest)
 
-            if not download_url:
-                self.log_callback(logging.ERROR,
-                                  "Không lấy được link tải. Cookie có thể hết hạn.")
-                return False
-
-            if self.stop_checker() or self._stopped:
-                return False
-
-            self._write_resume_meta(tmp_dir, {
-                'url': url,
-                'drive_dest': drive_dest,
-                'file_name': file_name,
-                'file_size': file_size,
-                'updated_at': int(time.time()),
-            })
-
-            # Phase 2: Download to VPS
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 2/3: Tải file về VPS...")
-            self._emit_state(status='downloading', phase='download')
-            self.progress_callback(2, "Bắt đầu tải từ Terabox...")
-
-            for attempt in range(max_attempts):
-                local_path = self.download_to_vps(download_url, cookie, tmp_dir, file_name, file_size)
-                if local_path:
-                    break
-                if self.stop_checker() or self._stopped or self._download_error == 'stopped':
-                    return False
-                if self._download_error != 'retryable':
+            for url_idx, single_url in enumerate(urls, 1):
+                if self.stop_checker() or self._stopped:
                     return False
 
-                self.log_callback(logging.WARNING,
-                                  "Link tải lỗi/hết hạn. Đang lấy link mới để resume (lần {0}/{1})...".format(
-                                      attempt + 1, max_attempts - 1))
-                self._emit_state(status='fetching_info', phase='info')
-                info = self.get_file_info(url, cookie)
-                if "error" in info or not info.get("download_url"):
-                    self._emit_state(status='paused', phase='download')
+                span = 100.0 / total_urls
+                self._progress_base = (url_idx - 1) * span
+                self._progress_span = span
+
+                tmp_dir = self._resume_dir_for_url(single_url)
+                local_path = None
+
+                # Phase 1: Get file info
+                self.log_callback(logging.INFO, "=" * 50)
+                if total_urls > 1:
+                    self.log_callback(logging.INFO, "File {0}/{1}".format(url_idx, total_urls))
+                self.log_callback(logging.INFO, "BUOC 1/3: Lay thong tin file...")
+                self._emit_state(status='fetching_info', phase='info',
+                                 current_index=url_idx, total_items=total_urls)
+                self._progress(0, "Dang lay thong tin file...")
+
+                info = self.get_file_info(single_url, cookie)
+                if "error" in info:
+                    self.log_callback(logging.ERROR, info["error"])
+                    return False
+
+                file_name = info["file_name"]
+                file_size = info["file_size"]
+                download_url = info.get("download_url", "")
+                self._emit_state(
+                    file_name=file_name,
+                    file_size=file_size,
+                    file_size_human=info["file_size_human"],
+                    phase='info'
+                )
+
+                self.log_callback(logging.INFO,
+                                  "File: {0} ({1})".format(file_name, info["file_size_human"]))
+
+                # Step 1: Check GDrive skip
+                if file_name and file_size > 0:
+                    if (file_name, file_size) in existing_files:
+                        self.log_callback(logging.INFO,
+                            "File da co tren GDrive, skip hoan toan: {0}".format(file_name))
+                        self._progress(100, "Skipped (da co tren GDrive)")
+                        continue
+
+                if not download_url:
                     self.log_callback(logging.ERROR,
-                                      "Không lấy được link mới. Cập nhật cookie ndus rồi bấm Bắt đầu tải lại để resume.")
+                                      "Khong lay duoc link tai. Cookie co the het han.")
                     return False
-                download_url = info["download_url"]
+
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                self._write_resume_meta(tmp_dir, {
+                    'url': single_url,
+                    'drive_dest': drive_dest,
+                    'file_name': file_name,
+                    'file_size': file_size,
+                    'updated_at': int(time.time()),
+                })
+
+                # Phase 2: Download to VPS
+                self.log_callback(logging.INFO, "=" * 50)
+                self.log_callback(logging.INFO, "BUOC 2/3: Tai file ve VPS...")
                 self._emit_state(status='downloading', phase='download')
+                self._progress(2, "Bat dau tai tu Terabox...")
 
-            if not local_path:
-                return False
+                for attempt in range(max_attempts):
+                    local_path = self.download_to_vps(download_url, cookie, tmp_dir, file_name, file_size)
+                    if local_path:
+                        break
+                    if self.stop_checker() or self._stopped or self._download_error == 'stopped':
+                        return False
+                    if self._download_error != 'retryable':
+                        return False
 
-            if self.stop_checker() or self._stopped:
-                return False
+                    self.log_callback(logging.WARNING,
+                                      "Link tai loi/het han. Dang lay link moi de resume (lan {0}/{1})...".format(
+                                          attempt + 1, max_attempts - 1))
+                    self._emit_state(status='fetching_info', phase='info')
+                    info = self.get_file_info(single_url, cookie)
+                    if "error" in info or not info.get("download_url"):
+                        self._emit_state(status='paused', phase='download')
+                        self.log_callback(logging.ERROR,
+                                          "Khong lay duoc link moi. Cap nhat cookie ndus roi bam Bat dau tai lai de resume.")
+                        return False
+                    download_url = info["download_url"]
+                    self._emit_state(status='downloading', phase='download')
 
-            # Phase 3: Upload to Google Drive
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 3/3: Đẩy file lên Google Drive...")
-            self._emit_state(status='uploading', phase='upload')
-            self.progress_callback(50, "Bắt đầu upload lên Google Drive...")
+                if not local_path:
+                    return False
 
-            success = self.upload_to_drive(local_path, drive_dest)
+                if self.stop_checker() or self._stopped:
+                    return False
 
-            if success:
-                self._emit_state(status='done', phase='done')
-                self.progress_callback(100, "Hoàn tất!")
+                # Phase 3: Upload to Google Drive
+                self.log_callback(logging.INFO, "=" * 50)
+                self.log_callback(logging.INFO, "BUOC 3/3: Day file len Google Drive...")
+                self._emit_state(status='uploading', phase='upload')
+                self._progress(50, "Bat dau upload len Google Drive...")
+
+                success = self.upload_to_drive(local_path, drive_dest)
+
+                if not success:
+                    return False
+
+                self._progress(100, "Hoan tat!")
                 self.log_callback(logging.INFO, "=" * 50)
                 self.log_callback(logging.INFO,
-                                  "HOÀN TẤT! File '{0}' đã được copy lên Google Drive.".format(file_name))
+                                  "HOAN TAT! File '{0}' da duoc copy len Google Drive.".format(file_name))
                 self.cleanup(tmp_dir)
-            return success
+
+            self._progress_base = 0.0
+            self._progress_span = 100.0
+            self._emit_state(status='done', phase='done',
+                             current_index=total_urls, total_items=total_urls)
+            self.progress_callback(100, "Hoan tat!")
+            return True
 
         except Exception as e:
             self.log_callback(logging.ERROR, "Pipeline error: {0}".format(str(e)))

@@ -128,6 +128,58 @@ class MediaFireEngine:
             return drive_dest
         return drive_dest.rstrip('/') + '/' + rel_dir
 
+    def _scan_gdrive_existing(self, drive_dest):
+        """Scan GDrive destination, return set((rel_path, size))."""
+        existing = set()
+        try:
+            dest = drive_dest
+            m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', drive_dest)
+            if m:
+                dest = "{0}:{{{1}}}{2}".format(m.group(1), m.group(2), m.group(3) or '')
+            binary = self._detect_binary()
+            cmd = [binary, "lsjson", "-R", "--files-only", dest]
+            sa_dir = self._get_sa_dir()
+            if sa_dir:
+                cmd.extend(["--drive-service-account-file-path", sa_dir])
+            p = subprocess.Popen(
+                self._cmd_for_subprocess(cmd),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = p.communicate(timeout=60)
+            if p.returncode == 0:
+                import json
+                data = json.loads(stdout.decode('utf-8', errors='replace'))
+                for item in data:
+                    path = item.get('Path', '')
+                    size = item.get('Size', 0)
+                    if path:
+                        norm = path.replace('\\', '/').strip('/')
+                        existing.add((norm, size))
+                self.log_callback(logging.INFO,
+                    "GDrive scan: tim thay {0} file da co.".format(len(existing)))
+        except Exception as e:
+            self.log_callback(logging.WARNING,
+                "Khong the quet GDrive: {0}".format(e))
+        return existing
+
+    def _find_completed_in_dir(self, tmp_dir, expected_size):
+        """Find a completed (non-.part) file in tmp_dir matching expected_size."""
+        try:
+            tmp_io = self._path_for_io(tmp_dir)
+            if not os.path.isdir(tmp_io):
+                return None
+            for fname in os.listdir(tmp_io):
+                if fname == 'download.part':
+                    continue
+                fpath = os.path.join(tmp_dir, fname)
+                fpath_io = self._path_for_io(fpath)
+                if os.path.isfile(fpath_io) and expected_size > 0:
+                    if os.path.getsize(fpath_io) == expected_size:
+                        return fpath_io
+        except Exception:
+            pass
+        return None
+
     def _normalize_url(self, url):
         raw = (url or '').strip()
         if not raw:
@@ -635,6 +687,10 @@ class MediaFireEngine:
             self._emit_state(total_items=total_items, current_index=0)
             self.log_callback(logging.INFO, "Đã tìm thấy {0} file MediaFire.".format(total_items))
 
+            # Step 0: GDrive pre-scan (1 lan duy nhat)
+            self.log_callback(logging.INFO, "Kiem tra file da co tren Google Drive...")
+            existing_files = self._scan_gdrive_existing(drive_dest)
+
             for index, item in enumerate(items, 1):
                 if self.stop_checker() or self._stopped:
                     return False
@@ -644,28 +700,47 @@ class MediaFireEngine:
                 self._progress_span = span
 
                 display_name = item.get('file_name') or 'MediaFire file'
+                item_size = item.get('file_size', 0)
                 self._emit_state(current_index=index, total_items=total_items,
                                  file_name=display_name,
-                                 file_size=item.get('file_size', 0),
+                                 file_size=item_size,
                                  file_size_human=item.get('file_size_human', ''))
                 self.log_callback(logging.INFO, "=" * 50)
                 self.log_callback(logging.INFO, "File {0}/{1}: {2}".format(index, total_items, display_name))
                 if item.get('rel_dir'):
                     self.log_callback(logging.INFO, "Thư mục đích con: {0}".format(item.get('rel_dir')))
 
-                self.log_callback(logging.INFO, "BƯỚC 2/3: Tải file MediaFire về VPS...")
-                self._emit_state(status='downloading', phase='download')
+                # Step 1: Check GDrive skip
+                item_rel = item.get('rel_dir', '')
+                if item_rel:
+                    check_path = item_rel.replace('\\', '/').strip('/') + '/' + display_name
+                else:
+                    check_path = display_name
+                check_path = check_path.replace('\\', '/').strip('/')
+                if item_size > 0 and (check_path, item_size) in existing_files:
+                    self.log_callback(logging.INFO, "Da co tren GDrive, skip: {0}".format(display_name))
+                    self._progress(100, "Skipped (da co tren GDrive)")
+                    continue
+
+                # Step 2: Check VPS complete file
                 item_tmp_dir = self._resume_dir_for_url(item.get('url') or display_name)
-                local_path = self.download_to_vps(item.get('url'), item_tmp_dir)
-                if not local_path:
-                    return False
+                local_path = self._find_completed_in_dir(item_tmp_dir, item_size)
+                if local_path:
+                    self.log_callback(logging.INFO,
+                        "File da tai du tren VPS, chuyen sang upload.")
+                else:
+                    self.log_callback(logging.INFO, "BUOC 2/3: Tai file MediaFire ve VPS...")
+                    self._emit_state(status='downloading', phase='download')
+                    local_path = self.download_to_vps(item.get('url'), item_tmp_dir)
+                    if not local_path:
+                        return False
 
                 if self.stop_checker() or self._stopped:
                     return False
 
-                self.log_callback(logging.INFO, "BƯỚC 3/3: Đẩy file lên Google Drive...")
+                self.log_callback(logging.INFO, "BUOC 3/3: Day file len Google Drive...")
                 self._emit_state(status='uploading', phase='upload')
-                self._progress(50, "Bắt đầu upload lên Google Drive...")
+                self._progress(50, "Bat dau upload len Google Drive...")
                 item_dest = self._append_dest_path(drive_dest, item.get('rel_dir') or '')
                 success = self.upload_to_drive(local_path, item_dest)
                 if not success:

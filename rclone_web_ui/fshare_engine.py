@@ -36,6 +36,12 @@ class FshareEngine:
         self._stopped = False
         self._token = ""
         self._session_id = ""
+        self._progress_base = 0.0
+        self._progress_span = 100.0
+
+    def _progress(self, percent, message):
+        overall = self._progress_base + (float(percent) * self._progress_span / 100.0)
+        self.progress_callback(overall, message)
 
     def _emit_state(self, **kwargs):
         if not self.state_callback:
@@ -128,6 +134,56 @@ class FshareEngine:
     def _resume_dir_for_url(self, url):
         key = hashlib.sha1((url or '').encode('utf-8')).hexdigest()[:24]
         return os.path.join('/tmp', 'fshare_dl', key)
+
+    def _scan_gdrive_existing(self, drive_dest):
+        """Scan GDrive destination, return set((filename, size))."""
+        existing = set()
+        try:
+            dest = drive_dest
+            m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', drive_dest)
+            if m:
+                dest = "{0}:{{{1}}}{2}".format(m.group(1), m.group(2), m.group(3) or '')
+            binary = self._detect_binary()
+            cmd = [binary, "lsjson", "-R", "--files-only", dest]
+            sa_dir = self._get_sa_dir()
+            if sa_dir:
+                cmd.extend(["--drive-service-account-file-path", sa_dir])
+            p = subprocess.Popen(
+                self._cmd_for_subprocess(cmd),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = p.communicate(timeout=60)
+            if p.returncode == 0:
+                import json
+                data = json.loads(stdout.decode('utf-8', errors='replace'))
+                for item in data:
+                    path = item.get('Path', '')
+                    size = item.get('Size', 0)
+                    if path:
+                        norm = path.replace('\\', '/').strip('/')
+                        existing.add((norm, size))
+                self.log_callback(logging.INFO,
+                    "GDrive scan: tim thay {0} file da co.".format(len(existing)))
+        except Exception as e:
+            self.log_callback(logging.WARNING,
+                "Khong the quet GDrive: {0}".format(e))
+        return existing
+
+    def _find_completed_in_dir(self, tmp_dir, expected_size):
+        """Find a completed (non-.part) file in tmp_dir matching expected_size."""
+        try:
+            if not os.path.isdir(tmp_dir):
+                return None
+            for fname in os.listdir(tmp_dir):
+                if fname == 'download.part':
+                    continue
+                fpath = os.path.join(tmp_dir, fname)
+                if os.path.isfile(fpath) and expected_size > 0:
+                    if os.path.getsize(fpath) == expected_size:
+                        return fpath
+        except Exception:
+            pass
+        return None
 
     def login(self, config):
         if requests is None:
@@ -291,13 +347,13 @@ class FshareEngine:
                     if now - last_emit >= 1:
                         pct = int(downloaded * 50 / total_size) if total_size else 5
                         pct = max(2, min(50, pct))
-                        self.progress_callback(pct, "Downloading: {0}".format(self._human_size(downloaded)))
+                        self._progress(pct, "Downloading: {0}".format(self._human_size(downloaded)))
                         last_emit = now
 
             if os.path.exists(final_path):
                 os.remove(final_path)
             os.rename(part_path, final_path)
-            self.progress_callback(50, "Tải Fshare hoàn tất")
+            self._progress(50, "Tải Fshare hoàn tất")
             self.log_callback(logging.INFO, "Đã tải về VPS: {0}".format(final_path))
             return final_path
         except Exception as e:
@@ -340,7 +396,7 @@ class FshareEngine:
                     if match:
                         rclone_percent = int(match.group(1))
                         overall = 50 + int(rclone_percent * 50 / 100)
-                        self.progress_callback(overall, "Uploading: {0}%".format(rclone_percent))
+                        self._progress(overall, "Uploading: {0}%".format(rclone_percent))
                     if self.stop_checker() or self._stopped:
                         self.log_callback(logging.WARNING, "Upload bị dừng bởi người dùng.")
                         self._process.terminate()
@@ -371,44 +427,95 @@ class FshareEngine:
 
     def run_full_pipeline(self, url, config, drive_dest, file_password=''):
         self._stopped = False
-        tmp_dir = self._resume_dir_for_url(url)
         try:
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 1/3: Lấy direct link Fshare...")
-            self._emit_state(status='fetching_info', phase='info')
-            self.progress_callback(0, "Đang lấy thông tin Fshare...")
-
-            info = self.get_file_info(url, config, file_password)
-            if 'error' in info:
-                self.log_callback(logging.ERROR, info['error'])
-                return False
-            self._emit_state(file_name=info.get('file_name', ''),
-                             file_size=info.get('file_size', 0),
-                             file_size_human=info.get('file_size_human', ''))
-
-            if self.stop_checker() or self._stopped:
+            # Parse multi-URL input (textarea: moi dong 1 link)
+            if isinstance(url, list):
+                urls = [u.strip() for u in url if u.strip()]
+            else:
+                urls = [u.strip() for u in (url or '').splitlines() if u.strip()]
+            if not urls:
+                self.log_callback(logging.ERROR, "Khong co link Fshare nao.")
                 return False
 
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 2/3: Tải file Fshare về VPS...")
-            self._emit_state(status='downloading', phase='download')
-            local_path = self.download_to_vps(url, config, tmp_dir, file_password)
-            if not local_path:
-                return False
+            total_urls = len(urls)
+            self._emit_state(total_items=total_urls, current_index=0)
 
-            if self.stop_checker() or self._stopped:
-                return False
+            # Step 0: GDrive pre-scan (1 lan duy nhat)
+            self.log_callback(logging.INFO, "Kiem tra file da co tren Google Drive...")
+            existing_files = self._scan_gdrive_existing(drive_dest)
 
-            self.log_callback(logging.INFO, "=" * 50)
-            self.log_callback(logging.INFO, "BƯỚC 3/3: Đẩy file lên Google Drive...")
-            self._emit_state(status='uploading', phase='upload')
-            self.progress_callback(50, "Bắt đầu upload lên Google Drive...")
-            success = self.upload_to_drive(local_path, drive_dest)
-            if success:
-                self._emit_state(status='done', phase='done')
-                self.progress_callback(100, "Hoàn tất!")
+            for idx, single_url in enumerate(urls, 1):
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                span = 100.0 / total_urls
+                self._progress_base = (idx - 1) * span
+                self._progress_span = span
+
+                tmp_dir = self._resume_dir_for_url(single_url)
+
+                self.log_callback(logging.INFO, "=" * 50)
+                if total_urls > 1:
+                    self.log_callback(logging.INFO, "File {0}/{1}".format(idx, total_urls))
+                self.log_callback(logging.INFO, "BUOC 1/3: Lay direct link Fshare...")
+                self._emit_state(status='fetching_info', phase='info',
+                                 current_index=idx, total_items=total_urls)
+                self.progress_callback(0, "Dang lay thong tin Fshare...")
+
+                info = self.get_file_info(single_url, config, file_password)
+                if 'error' in info:
+                    self.log_callback(logging.ERROR, info['error'])
+                    return False
+
+                file_name = info.get('file_name', '')
+                file_size = info.get('file_size', 0)
+                file_id = info.get('file_id', '')
+                self._emit_state(file_name=file_name,
+                                 file_size=file_size,
+                                 file_size_human=info.get('file_size_human', ''))
+
+                # Step 1: Check GDrive skip
+                if file_name and file_name != file_id and file_size > 0:
+                    if (file_name, file_size) in existing_files:
+                        self.log_callback(logging.INFO,
+                            "File da co tren GDrive, skip hoan toan: {0}".format(file_name))
+                        self._progress(100, "Skipped (da co tren GDrive)")
+                        continue
+
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                # Step 2: Check VPS complete file
+                local_path = self._find_completed_in_dir(tmp_dir, file_size)
+                if local_path:
+                    self.log_callback(logging.INFO,
+                        "File da tai du tren VPS tu lan truoc, chuyen sang upload.")
+                else:
+                    self.log_callback(logging.INFO, "=" * 50)
+                    self.log_callback(logging.INFO, "BUOC 2/3: Tai file Fshare ve VPS...")
+                    self._emit_state(status='downloading', phase='download')
+                    local_path = self.download_to_vps(single_url, config, tmp_dir, file_password)
+                    if not local_path:
+                        return False
+
+                if self.stop_checker() or self._stopped:
+                    return False
+
+                self.log_callback(logging.INFO, "=" * 50)
+                self.log_callback(logging.INFO, "BUOC 3/3: Day file len Google Drive...")
+                self._emit_state(status='uploading', phase='upload')
+                self._progress(50, "Bat dau upload len Google Drive...")
+                success = self.upload_to_drive(local_path, drive_dest)
+                if not success:
+                    return False
                 self.cleanup(tmp_dir)
-            return success
+
+            self._progress_base = 0
+            self._progress_span = 100
+            self._emit_state(status='done', phase='done',
+                             current_index=total_urls, total_items=total_urls)
+            self.progress_callback(100, "Hoan tat!")
+            return True
         except Exception as e:
             self.log_callback(logging.ERROR, "Pipeline error: {0}".format(str(e)))
             return False

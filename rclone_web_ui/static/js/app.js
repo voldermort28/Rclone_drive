@@ -290,30 +290,40 @@ document.addEventListener('click', function (e) {
 // ==================== DRIVE EXPLORER ====================
 let explorerPath = 'gc:';
 let explorerHistory = ['gc:'];
+let explorerTargetInput = null;
 
 const explorerModal = document.getElementById('driveExplorerModal');
 const explorerList = document.getElementById('explorerList');
 const explorerBreadcrumb = document.getElementById('explorerBreadcrumb');
 
-document.getElementById('browseDestBtn').addEventListener('click', () => {
-    let currentPath = outputDirInput.value.trim();
-    if (!currentPath || !currentPath.startsWith('gc:')) {
-        currentPath = 'gc:';
-    }
+// Event listener for all Duyệt Drive buttons
+document.querySelectorAll('.btn-browse-drive').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        const targetInput = document.getElementById(targetId);
+        if (!targetInput) return;
 
-    explorerPath = currentPath;
+        explorerTargetInput = targetInput;
 
-    // Build history for back button
-    const parts = currentPath.split('/');
-    explorerHistory = [];
-    let acc = '';
-    for (let i = 0; i < parts.length; i++) {
-        acc += (i > 0 ? '/' : '') + parts[i];
-        explorerHistory.push(acc);
-    }
+        let currentPath = targetInput.value.trim();
+        if (!currentPath || !currentPath.startsWith('gc:')) {
+            currentPath = 'gc:';
+        }
 
-    explorerModal.style.display = 'flex';
-    loadExplorerDir(explorerPath);
+        explorerPath = currentPath;
+
+        // Build history for back button
+        const parts = currentPath.split('/');
+        explorerHistory = [];
+        let acc = '';
+        for (let i = 0; i < parts.length; i++) {
+            acc += (i > 0 ? '/' : '') + parts[i];
+            explorerHistory.push(acc);
+        }
+
+        explorerModal.style.display = 'flex';
+        loadExplorerDir(explorerPath);
+    });
 });
 
 document.getElementById('explorerCloseBtn').addEventListener('click', () => {
@@ -326,8 +336,28 @@ explorerModal.addEventListener('click', (e) => {
 });
 
 document.getElementById('explorerSelectBtn').addEventListener('click', () => {
-    outputDirInput.value = explorerPath;
-    localStorage.setItem('rclone_dest', explorerPath);
+    if (explorerTargetInput) {
+        explorerTargetInput.value = explorerPath;
+        
+        // Map target input IDs to their respective localStorage keys
+        const localStorageKeyMap = {
+            'output_dir': 'rclone_dest',
+            'teraboxDest': 'tb_dest',
+            'fshareDest': 'fs_dest',
+            'mediafireDest': 'mf_dest',
+            'megaDest': 'mega_dest',
+            'verify_source': 'verify_source',
+            'verify_dest': 'verify_dest'
+        };
+        const key = localStorageKeyMap[explorerTargetInput.id];
+        if (key) {
+            localStorage.setItem(key, explorerPath);
+        }
+        
+        // Trigger event inputs if needed
+        explorerTargetInput.dispatchEvent(new Event('input', { bubbles: true }));
+        explorerTargetInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
     explorerModal.style.display = 'none';
 });
 
@@ -532,18 +562,30 @@ function updateBreadcrumb() {
     }
 
     function fsValidUrl(url) {
-        return url.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(url);
+        if (!url) return false;
+        var lines = url.split('\n').map(function(line) { return line.trim(); }).filter(Boolean);
+        if (lines.length === 0) return false;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            var ok = line.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(line);
+            if (!ok) return false;
+        }
+        return true;
     }
 
     function fsCheckInfo() {
-        var url = fsUrlInput.value.trim();
-        var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
-        if (!url) {
+        var rawUrl = fsUrlInput.value.trim();
+        if (!rawUrl) {
             alert('Vui lòng nhập link Fshare!');
             return;
         }
-        if (!fsValidUrl(url)) {
-            alert('Link không phải Fshare file. Cần link dạng: https://www.fshare.vn/file/...');
+        var lines = rawUrl.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        var url = lines[0] || '';
+        var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
+
+        var singleValid = url.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(url);
+        if (!singleValid) {
+            alert('Dòng đầu tiên không phải link Fshare file hợp lệ. Cần link dạng: https://www.fshare.vn/file/...');
             return;
         }
 
@@ -559,7 +601,7 @@ function updateBreadcrumb() {
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.success) {
-                    fsFileName.textContent = data.file_name || data.file_id || 'Fshare file';
+                    fsFileName.textContent = (lines.length > 1 ? '[Link 1] ' : '') + (data.file_name || data.file_id || 'Fshare file');
                     fsFileSize.textContent = data.file_size_human || 'Direct link sẵn sàng';
                     fsFileInfo.style.display = 'block';
                 } else {
@@ -580,7 +622,7 @@ function updateBreadcrumb() {
         var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
 
         if (!url) { alert('Vui lòng nhập link Fshare!'); return; }
-        if (!fsValidUrl(url)) { alert('Link không phải Fshare file.'); return; }
+        if (!fsValidUrl(url)) { alert('Có dòng không phải link Fshare file hợp lệ.'); return; }
         if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
 
         localStorage.setItem('fs_link', url);
@@ -687,6 +729,9 @@ function updateBreadcrumb() {
 
         fsStatusText.textContent = data.message || 'Đang xử lý...';
         var detail = '';
+        if (data.total_items && data.total_items > 0) {
+            detail += '[' + (data.current_index || 0) + '/' + data.total_items + '] ';
+        }
         if (data.file_name) detail += data.file_name;
         if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
         fsProgressDetail.textContent = detail;
@@ -1010,9 +1055,11 @@ function updateBreadcrumb() {
 
         mfStatusText.textContent = data.message || 'Đang xử lý...';
         var detail = '';
-        if (data.total_items) detail += (data.current_index || 0) + '/' + data.total_items;
-        if (data.file_name) detail += (detail ? ' · ' : '') + data.file_name;
-        if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
+        if (data.total_items && data.total_items > 0) {
+            detail += '[' + (data.current_index || 0) + '/' + data.total_items + '] ';
+        }
+        if (data.file_name) detail += (detail && !detail.endsWith(' ') ? ' · ' : '') + data.file_name;
+        if (data.file_size_human) detail += (detail && !detail.endsWith(' ') ? ' · ' : '') + data.file_size_human;
         mfProgressDetail.textContent = detail;
 
         if (data.phase === 'info' || data.status === 'fetching_info') {
@@ -1325,9 +1372,11 @@ function updateBreadcrumb() {
 
         megaStatusText.textContent = data.message || 'Đang xử lý...';
         var detail = '';
-        if (data.total_items) detail += (data.current_index || 0) + '/' + data.total_items;
-        if (data.file_name) detail += (detail ? ' · ' : '') + data.file_name;
-        if (data.file_size_human) detail += (detail ? ' · ' : '') + data.file_size_human;
+        if (data.total_items && data.total_items > 0) {
+            detail += '[' + (data.current_index || 0) + '/' + data.total_items + '] ';
+        }
+        if (data.file_name) detail += (detail && !detail.endsWith(' ') ? ' · ' : '') + data.file_name;
+        if (data.file_size_human) detail += (detail && !detail.endsWith(' ') ? ' · ' : '') + data.file_size_human;
         megaProgressDetail.textContent = detail;
 
         if (data.phase === 'info' || data.status === 'fetching_info') {
@@ -2329,13 +2378,17 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // ---- Check File Info ----
     function tbCheckInfo() {
-        var url = tbUrlInput.value.trim();
-        if (!url) {
+        var rawUrl = tbUrlInput.value.trim();
+        if (!rawUrl) {
             alert('Vui lòng nhập link Terabox!');
             return;
         }
-        if (url.indexOf('terabox') === -1 && url.indexOf('1024tera') === -1) {
-            alert('Link không phải Terabox. Cần link dạng: https://www.terabox.app/s/...');
+        var lines = rawUrl.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        var url = lines[0] || '';
+
+        var isTerabox = url.indexOf('terabox') === -1 && url.indexOf('1024tera') === -1 && url.indexOf('teraboxapp') === -1;
+        if (isTerabox) {
+            alert('Dòng đầu tiên không phải link Terabox. Cần link dạng: https://www.terabox.app/s/...');
             return;
         }
 
@@ -2351,7 +2404,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.success) {
-                    tbFileName.textContent = data.file_name;
+                    tbFileName.textContent = (lines.length > 1 ? '[Link 1] ' : '') + data.file_name;
                     var detail = data.file_size_human || '';
                     if (data.download_url_ready === false) {
                         detail += ' · đã lấy metadata, link tải sẽ thử lại khi bắt đầu';
@@ -2378,6 +2431,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         var dest = tbDestInput.value.trim();
 
         if (!url) { alert('Vui lòng nhập link Terabox!'); return; }
+        var lines = url.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        if (lines.length === 0) { alert('Vui lòng nhập link Terabox!'); return; }
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (line.indexOf('terabox') === -1 && line.indexOf('1024tera') === -1 && line.indexOf('teraboxapp') === -1) {
+                alert('Dòng ' + (i + 1) + ' không phải link Terabox hợp lệ!');
+                return;
+            }
+        }
         if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
 
         // Save to localStorage
@@ -2500,6 +2562,9 @@ window.addEventListener('DOMContentLoaded', async () => {
                 // Update status text
                 tbStatusText.textContent = data.message || 'Đang xử lý...';
                 var progressDetail = '';
+                if (data.total_items && data.total_items > 0) {
+                    progressDetail += '[' + (data.current_index || 0) + '/' + data.total_items + '] ';
+                }
                 if (data.file_name) progressDetail += data.file_name;
                 if (data.file_size_human) {
                     progressDetail += (progressDetail ? ' · ' : '') + data.file_size_human;

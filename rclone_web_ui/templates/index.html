@@ -117,7 +117,7 @@
                         </div>
                     </div>
                     <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button id="browseDestBtn" class="btn-secondary"
+                        <button id="browseDestBtn" class="btn-secondary btn-browse-drive" data-target="output_dir"
                             style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
                     </div>
                 </div>
@@ -200,11 +200,19 @@
                 <div class="input-group">
                     <label for="verify_source">Source Remote (Thư mục Gốc)</label>
                     <input type="text" id="verify_source" placeholder="VD: gc:{source_folder_id}">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="verify_source"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div class="input-group">
                     <label for="verify_dest">Destination Remote (Thư mục nhận file)</label>
                     <input type="text" id="verify_dest" placeholder="VD: gc:{destination_folder_id}">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="verify_dest"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -462,7 +470,7 @@
             <section class="card input-section">
                 <div class="input-group">
                     <label for="teraboxUrl">Link Terabox</label>
-                    <input type="text" id="teraboxUrl" placeholder="https://www.terabox.app/s/... hoặc https://teraboxapp.com/s/..." autocomplete="off">
+                    <textarea id="teraboxUrl" rows="5" placeholder="Paste link Terabox ở đây (mỗi dòng 1 link)...&#10;VD: https://www.terabox.app/s/1xyz..." autocomplete="off"></textarea>
                 </div>
 
                 <!-- File info (hidden until check) -->
@@ -479,6 +487,10 @@
                 <div class="input-group">
                     <label for="teraboxDest">Destination Google Drive (Nơi nhận)</label>
                     <input type="text" id="teraboxDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="teraboxDest"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -555,7 +567,7 @@
             <section class="card input-section">
                 <div class="input-group">
                     <label for="fshareUrl">Link Fshare</label>
-                    <input type="text" id="fshareUrl" placeholder="https://www.fshare.vn/file/..." autocomplete="off">
+                    <textarea id="fshareUrl" rows="5" placeholder="Paste link Fshare ở đây (mỗi dòng 1 link)...&#10;VD: https://www.fshare.vn/file/ABC..." autocomplete="off"></textarea>
                 </div>
                 <div class="input-group">
                     <label for="fshareFilePassword">Mật khẩu file Fshare (nếu có)</label>
@@ -575,6 +587,10 @@
                 <div class="input-group">
                     <label for="fshareDest">Destination Google Drive (Nơi nhận)</label>
                     <input type="text" id="fshareDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="fshareDest"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -666,6 +682,10 @@
                 <div class="input-group">
                     <label for="mediafireDest">Destination Google Drive (Nơi nhận)</label>
                     <input type="text" id="mediafireDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="mediafireDest"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -754,6 +774,10 @@
                 <div class="input-group">
                     <label for="megaDest">Destination Google Drive (Nơi nhận)</label>
                     <input type="text" id="megaDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="megaDest"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">

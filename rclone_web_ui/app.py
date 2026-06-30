@@ -1,3 +1,18 @@
+import sys
+import io
+
+# Force stdout/stderr to use UTF-8 regardless of locale
+if hasattr(sys.stdout, 'buffer'):
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'buffer'):
+    try:
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 import os
 import threading
 import logging
@@ -745,7 +760,9 @@ terabox_state = {
     'file_size_human': '',
     'phase': '',
     'logs': [],
-    'stop_flag': False
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
 }
 _terabox_engine = None
 
@@ -760,7 +777,9 @@ def _reset_terabox_state():
         'file_size_human': '',
         'phase': '',
         'logs': [],
-        'stop_flag': False
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
     })
 
 
@@ -892,7 +911,9 @@ def terabox_start():
         'file_size_human': '',
         'phase': 'info',
         'logs': [],
-        'stop_flag': False
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
     })
 
     _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
@@ -938,6 +959,8 @@ def terabox_status():
         'file_size_human': terabox_state['file_size_human'],
         'phase': terabox_state['phase'],
         'logs': terabox_state['logs'][-50:],
+        'current_index': terabox_state.get('current_index', 0),
+        'total_items': terabox_state.get('total_items', 0),
     })
 
 
@@ -997,7 +1020,9 @@ fshare_state = {
     'file_size_human': '',
     'phase': '',
     'logs': [],
-    'stop_flag': False
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
 }
 _fshare_engine = None
 
@@ -1060,7 +1085,9 @@ def _reset_fshare_state():
         'file_size_human': '',
         'phase': '',
         'logs': [],
-        'stop_flag': False
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
     })
 
 
@@ -1155,7 +1182,9 @@ def fshare_start():
         'file_size_human': '',
         'phase': 'info',
         'logs': [],
-        'stop_flag': False
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
     })
 
     _fshare_engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
@@ -1197,6 +1226,8 @@ def fshare_status():
         'file_size_human': fshare_state['file_size_human'],
         'phase': fshare_state['phase'],
         'logs': fshare_state['logs'][-50:],
+        'current_index': fshare_state.get('current_index', 0),
+        'total_items': fshare_state.get('total_items', 0),
     })
 
 

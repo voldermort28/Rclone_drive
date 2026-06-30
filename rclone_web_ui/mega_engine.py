@@ -246,7 +246,15 @@ class MegaEngine:
 
         raw_nodes = data['f']
         nodes = []
+        
+        # Detect the root node of this shared folder structure.
+        # The root node is either type 2 (root share), or a node whose parent is not in the list of returned nodes.
+        node_ids = {n.get('h') for n in raw_nodes if n.get('h')}
         root_handle = None
+        for n in raw_nodes:
+            if n.get('t') == 2 or (n.get('p') not in node_ids):
+                root_handle = n.get('h')
+                break
 
         for node in raw_nodes:
             h = node.get('h', '')
@@ -256,10 +264,25 @@ class MegaEngine:
             a_str = node.get('a', '')
             p = node.get('p', '')
 
+            if t == 2:
+                continue
+
             name = ''
             node_key = []
             try:
-                enc_key_b64 = k_str.split(':')[1] if ':' in k_str else k_str
+                enc_key_b64 = ''
+                if k_str:
+                    parts = k_str.split('/')
+                    for part in parts:
+                        if ':' in part:
+                            h_part, k_part = part.split(':', 1)
+                            if h_part == root_handle:
+                                enc_key_b64 = k_part
+                                break
+                    if not enc_key_b64:
+                        first_part = parts[0]
+                        enc_key_b64 = first_part.split(':', 1)[1] if ':' in first_part else first_part
+
                 enc_key_bytes = self._b64_url_decode(enc_key_b64)
                 enc_key_a32 = self._str_to_a32(enc_key_bytes)
                 node_key = self._decrypt_key(enc_key_a32, folder_key)
@@ -267,10 +290,6 @@ class MegaEngine:
                 name = attrs.get('n', '')
             except Exception:
                 name = 'file_{0}'.format(h)
-
-            if t == 2:
-                root_handle = h
-                continue
 
             nodes.append({
                 'handle': h,
@@ -367,8 +386,8 @@ class MegaEngine:
         ctr = Counter.new(128, initial_value=initial_value)
         cipher = AES.new(self._a32_to_str(aes_key), AES.MODE_CTR, counter=ctr)
 
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         dest_io = self._path_for_io(dest_path)
+        os.makedirs(os.path.dirname(dest_io), exist_ok=True)
 
         self._response = requests.get(dl_url, stream=True, timeout=60,
                                       headers={'User-Agent': self.USER_AGENT})
@@ -460,10 +479,11 @@ class MegaEngine:
 
     def cleanup(self, path):
         try:
-            if os.path.isfile(path):
-                os.remove(path)
-            elif os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
+            path_io = self._path_for_io(path)
+            if os.path.isfile(path_io):
+                os.remove(path_io)
+            elif os.path.isdir(path_io):
+                shutil.rmtree(path_io, ignore_errors=True)
             self.log_callback(logging.INFO, "Cleaned: {0}".format(path))
         except Exception as e:
             self.log_callback(logging.WARNING, "Cleanup error: {0}".format(str(e)))
@@ -496,6 +516,39 @@ class MegaEngine:
             self.log_callback(logging.INFO, "Folder: {0} ({1} files, {2})".format(
                 folder_name, total_items, info.get('total_size_human', '')))
 
+            # Check existing files on Google Drive destination to skip already completed ones
+            self.log_callback(logging.INFO, "Checking existing files on Google Drive to enable resume...")
+            existing_files = set()
+            try:
+                dest = drive_dest
+                m = re.match(r'^([^:,]+):([A-Za-z0-9\-_]{15,})(/.*)?$', drive_dest)
+                if m:
+                    dest = "{0}:{{{1}}}{2}".format(m.group(1), m.group(2), m.group(3) or '')
+                binary = self._detect_binary()
+                cmd = [binary, "lsjson", "-R", "--files-only", dest]
+                sa_dir = self._get_sa_dir()
+                if sa_dir:
+                    cmd.extend(["--drive-service-account-file-path", sa_dir])
+
+                p = subprocess.Popen(
+                    self._cmd_for_subprocess(cmd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout, stderr = p.communicate(timeout=30)
+                if p.returncode == 0:
+                    import json
+                    data = json.loads(stdout.decode('utf-8', errors='replace'))
+                    for item in data:
+                        path = item.get('Path', '')
+                        size = item.get('Size', 0)
+                        if path:
+                            norm_path = path.replace('\\', '/').strip('/')
+                            existing_files.add((norm_path, size))
+                    self.log_callback(logging.INFO, "Found {0} files already on GDrive destination.".format(len(existing_files)))
+            except Exception as e:
+                self.log_callback(logging.WARNING, "Cannot check existing files on GDrive: {0}".format(e))
+
             for index, fobj in enumerate(files, 1):
                 if self.stop_checker() or self._stopped:
                     return False
@@ -507,6 +560,19 @@ class MegaEngine:
                 fname = fobj.get('name', 'file')
                 fsize = fobj.get('size', 0)
                 rel_dir = fobj.get('rel_dir', '')
+
+                # Check if this file was already uploaded to GDrive
+                if rel_dir:
+                    rel_path = rel_dir.replace('\\', '/').strip('/') + '/' + fname
+                else:
+                    rel_path = fname
+                rel_path_norm = rel_path.replace('\\', '/').strip('/')
+
+                if (rel_path_norm, fsize) in existing_files:
+                    self.log_callback(logging.INFO, "File {0}/{1}: {2} ({3}) - Already exists on GDrive, skipping.".format(
+                        index, total_items, fname, fobj.get('size_human', '')))
+                    self._progress(100, "Skipped (already exists)")
+                    continue
 
                 self._emit_state(current_index=index, total_items=total_items,
                                  file_name=fname, file_size=fsize,
@@ -532,10 +598,20 @@ class MegaEngine:
                     tmp_dir = os.path.join('/tmp', 'mega_dl')
                 local_path = os.path.join(tmp_dir, fname)
 
-                ok = self._download_and_decrypt(dl_url, fobj['key_a32'], local_path, fsize)
-                if not ok:
-                    return False
-                self.log_callback(logging.INFO, "Downloaded to VPS: {0}".format(local_path))
+                # Step 2b: Check if file already fully downloaded on VPS
+                local_path_io = self._path_for_io(local_path)
+                skip_dl = False
+                if fsize > 0 and os.path.exists(local_path_io):
+                    if os.path.getsize(local_path_io) == fsize:
+                        self.log_callback(logging.INFO,
+                            "File already complete on VPS, skip Mega download.")
+                        skip_dl = True
+
+                if not skip_dl:
+                    ok = self._download_and_decrypt(dl_url, fobj['key_a32'], local_path, fsize)
+                    if not ok:
+                        return False
+                    self.log_callback(logging.INFO, "Downloaded to VPS: {0}".format(local_path))
 
                 if self.stop_checker() or self._stopped:
                     return False
