@@ -202,6 +202,26 @@ class MediaFireEngine:
             return m.group(1)
         return ''
 
+    def _folder_name_from_api(self, folder_key):
+        try:
+            resp = requests.get(
+                'https://www.mediafire.com/api/1.5/folder/get_info.php',
+                params={
+                    'folder_key': folder_key,
+                    'response_format': 'json',
+                },
+                headers=self._headers({'Accept': 'application/json'}),
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                name = data.get('response', {}).get('folder_info', {}).get('name')
+                if name:
+                    return self._safe_name(name)
+        except Exception:
+            pass
+        return None
+
     def _folder_name_from_url(self, url, fallback):
         try:
             tail = (url or '').split('/folder/', 1)[1].split('/', 1)[1]
@@ -210,7 +230,37 @@ class MediaFireEngine:
                 return self._safe_name(unquote_plus(tail))
         except Exception:
             pass
+        if fallback:
+            api_name = self._folder_name_from_api(fallback)
+            if api_name:
+                return api_name
         return self._safe_name(fallback)
+
+    def _resolve_ambiguous_url(self, url):
+        try:
+            self.log_callback(logging.INFO, "Đang kiểm tra loại link (file/folder): {0}".format(url))
+            session = requests.Session()
+            resp = session.get(url, headers=self._headers(), timeout=20)
+            if resp.status_code == 200:
+                final_url = resp.url
+                folder_key = self._folder_key_from_url(final_url)
+                if folder_key:
+                    return 'folder', folder_key, final_url
+                
+                file_key = self._file_key_from_url(final_url)
+                if file_key:
+                    return 'file', file_key, final_url
+
+                html = resp.text or ''
+                m = re.search(r'afI\s*=\s*["\']([A-Za-z0-9]+)["\']', html)
+                if m:
+                    return 'folder', m.group(1), final_url
+                
+                if self._extract_direct_link(html):
+                    return 'file', None, final_url
+        except Exception as e:
+            self.log_callback(logging.WARNING, "Lỗi khi kiểm tra loại link: {0}".format(e))
+        return 'unknown', None, url
 
     def parse_input_urls(self, raw):
         text = (raw or '').strip()
@@ -335,6 +385,18 @@ class MediaFireEngine:
         file_count = 0
         for url in urls:
             folder_key = self._folder_key_from_url(url)
+            file_key = self._file_key_from_url(url)
+
+            # Phân giải động nếu không rõ link là file hay folder (ví dụ link dạng query ?)
+            if not folder_key and not file_key:
+                url_type, resolved_key, resolved_url = self._resolve_ambiguous_url(url)
+                if url_type == 'folder':
+                    folder_key = resolved_key
+                    url = resolved_url
+                elif url_type == 'file':
+                    file_key = resolved_key
+                    url = resolved_url
+
             if folder_key:
                 folder_count += 1
                 root_name = self._folder_name_from_url(url, folder_key)
