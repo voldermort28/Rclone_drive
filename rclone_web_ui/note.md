@@ -11,7 +11,11 @@ Tài liệu này lưu trữ toàn bộ thông tin quan trọng của hệ thốn
 * **Python Version**: `3.6.8` (CentOS 7)
 * **Gclone Binary**: `/usr/bin/gclone` hoặc `/usr/local/bin/gclone`
 * **Service Accounts (SA)**: Thư mục chứa các file JSON của SA ở `/www/wwwroot/rclone.laboon.vn/sa` (hiện có 27 tài khoản dùng để xoay vòng vượt giới hạn sao chép 750GB/ngày của Google Drive).
-* **Lệnh khởi động/khởi động lại Backend**:
+* **Quy trình Deploy (CI/CD)**: Hệ thống đã được thiết lập tự động hóa deployment thông qua **GitHub Actions** (`.github/workflows/deploy.yml`). Khi thực hiện `git push` lên branch `main`, workflow sẽ:
+  1. Tự động SCP toàn bộ code từ thư mục `rclone_web_ui/` lên VPS `/www/wwwroot/rclone.laboon.vn/`.
+  2. Tự động kill tiến trình Flask cũ và restart tiến trình Flask mới (`python3 app.py`).
+  * *Lưu ý*: Không cần deploy thủ công. Chỉ cần commit và push lên nhánh `main`.
+* **Lệnh khởi động/khởi động lại Backend thủ công (khi cần)**:
   ```bash
   kill -9 $(lsof -t -i:8080); cd /www/wwwroot/rclone.laboon.vn && nohup env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 python3 app.py > app_run.log 2>&1 &
   ```
