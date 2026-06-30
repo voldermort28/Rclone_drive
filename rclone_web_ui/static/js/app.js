@@ -891,10 +891,22 @@ function updateBreadcrumb() {
     if (savedMfDest) mfDestInput.value = savedMfDest;
 
     function mfValidUrl(url) {
-        return url.indexOf('mediafire.com/folder/') > -1 ||
-            url.indexOf('mediafire.com/file/') > -1 ||
-            url.indexOf('download') > -1 && url.indexOf('mediafire.com') > -1 ||
-            /^[A-Za-z0-9]{8,}$/.test(url);
+        if (!url) return false;
+        var lines = url.split('\n').map(function(line) { return line.trim(); }).filter(Boolean);
+        if (lines.length === 0) return false;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            // Check if it is a pure key/token
+            if (/^[A-Za-z0-9]+$/.test(line) && line.length >= 8) {
+                continue;
+            }
+            // Check if it is a MediaFire link
+            if (line.toLowerCase().indexOf('mediafire.com') > -1) {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     function mfCheckInfo() {
