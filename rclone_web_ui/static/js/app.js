@@ -567,7 +567,7 @@ function updateBreadcrumb() {
         if (lines.length === 0) return false;
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
-            var ok = line.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(line);
+            var ok = /fshare\.vn\/file\//i.test(line) || /^[A-Za-z0-9]{8,}$/.test(line);
             if (!ok) return false;
         }
         return true;
@@ -1228,8 +1228,7 @@ function updateBreadcrumb() {
     if (savedMegaDest) megaDestInput.value = savedMegaDest;
 
     function megaValidUrl(url) {
-        return url.indexOf('mega.nz/folder/') > -1 ||
-            url.indexOf('mega.nz/#F!') > -1;
+        return /mega\.(?:nz|co\.nz|io)\/(?:folder\/|#F!)/i.test(url);
     }
 
     function megaCheckInfo() {
@@ -2423,7 +2422,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         var lines = rawUrl.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
         var url = lines[0] || '';
 
-        var isTerabox = url.indexOf('terabox') === -1 && url.indexOf('1024tera') === -1 && url.indexOf('teraboxapp') === -1;
+        var isTerabox = !/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(url);
         if (isTerabox) {
             alert('Dòng đầu tiên không phải link Terabox. Cần link dạng: https://www.terabox.app/s/...');
             return;
@@ -2472,7 +2471,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (lines.length === 0) { alert('Vui lòng nhập link Terabox!'); return; }
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
-            if (line.indexOf('terabox') === -1 && line.indexOf('1024tera') === -1 && line.indexOf('teraboxapp') === -1) {
+            if (!/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(line)) {
                 alert('Dòng ' + (i + 1) + ' không phải link Terabox hợp lệ!');
                 return;
             }

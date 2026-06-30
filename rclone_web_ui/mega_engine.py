@@ -209,16 +209,16 @@ class MegaEngine:
     # ==================== MEGA FOLDER PARSING ====================
 
     def parse_folder_url(self, url):
-        """Parse mega.nz folder URL into (folder_id, folder_key_a32)."""
+        """Parse mega folder URL into (folder_id, folder_key_a32)."""
         url = (url or '').strip()
         # New format: mega.nz/folder/ID#KEY
-        m = re.match(r'https?://mega\.nz/folder/([^#]+)#(.+)', url)
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
             return folder_id, self._str_to_a32(key_bytes)
         # Old format: mega.nz/#F!ID!KEY
-        m = re.match(r'https?://mega\.nz/#F!([^!]+)!(.+)', url)
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#F!([^!]+)!(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
