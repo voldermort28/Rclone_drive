@@ -684,6 +684,66 @@ def stop_download():
         return jsonify({'message': 'Stopping process...'})
     return jsonify({'message': 'No process running'})
 
+@app.route('/api/clear_temp', methods=['POST'])
+def clear_temp():
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine
+    # 1. Stop any currently running task
+    stop_event.set()
+    terabox_state['stop_flag'] = True
+    if _terabox_engine:
+        try: _terabox_engine.stop()
+        except: pass
+        
+    fshare_state['stop_flag'] = True
+    if _fshare_engine:
+        try: _fshare_engine.stop()
+        except: pass
+        
+    mediafire_state['stop_flag'] = True
+    if _mediafire_engine:
+        try: _mediafire_engine.stop()
+        except: pass
+        
+    mega_state['stop_flag'] = True
+    if _mega_engine:
+        try: _mega_engine.stop()
+        except: pass
+        
+    # 2. Delete all temp folders
+    deleted_paths = []
+    for path, name in [
+        (TERABOX_TMP_ROOT, 'Terabox'),
+        (FSHARE_TMP_ROOT, 'Fshare'),
+        (MEDIAFIRE_TMP_ROOT, 'MediaFire'),
+        (MEGA_TMP_ROOT, 'Mega')
+    ]:
+        if os.path.exists(path):
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+                deleted_paths.append(name)
+            except Exception as e:
+                logging.error(f"Error clearing {name} temp path: {e}")
+                
+    # 3. Reset states to idle
+    _reset_terabox_state()
+    _reset_fshare_state()
+    _reset_mediafire_state()
+    _reset_mega_state()
+    
+    # 4. Clear queue
+    try:
+        save_queue([])
+    except Exception as e:
+        logging.error(f"Error clearing queue on clear_temp: {e}")
+        
+    if deleted_paths:
+        msg = f"Đã dừng tiến trình và xóa thư mục tạm: {', '.join(deleted_paths)}."
+    else:
+        msg = "Đã dừng tiến trình và dọn dẹp trạng thái (không có thư mục tạm nào cần xóa)."
+        
+    return jsonify({'success': True, 'message': msg})
+
+
 @app.route('/api/download', methods=['POST'])
 def start_download():
     data = request.get_json(force=True, silent=True)
@@ -752,7 +812,7 @@ def start_download():
             'execute_at': time.time() - 1,
             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        if job_type == 'fshare' and file_password:
+        if file_password:
             job['file_password'] = file_password
             
         q.append(job)
@@ -1224,173 +1284,7 @@ def terabox_cookie():
         return jsonify({'has_cookie': False})
 
 
-@app.route('/api/terabox/info', methods=['POST'])
-def terabox_info():
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Terabox'})
-
-    # Read cookie
-    if not os.path.exists(TERABOX_COOKIE_FILE):
-        return jsonify({'success': False, 'error': 'Chưa cấu hình cookie. Vui lòng lưu cookie trước.'})
-    with open(TERABOX_COOKIE_FILE, 'r') as f:
-        cookie = f.read().strip()
-    if not cookie:
-        return jsonify({'success': False, 'error': 'Cookie trống. Vui lòng cập nhật cookie.'})
-
-    engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
-    info = engine.get_file_info(url, cookie)
-
-    if 'error' in info:
-        return jsonify({'success': False, 'error': info['error']})
-
-    return jsonify({
-        'success': True,
-        'file_name': info['file_name'],
-        'file_size': info['file_size'],
-        'file_size_human': info['file_size_human'],
-        'download_url_ready': info.get('download_url_ready', False),
-        'missing_fields': info.get('missing_fields', []),
-    })
-
-
-@app.route('/api/terabox/start', methods=['POST'])
-def terabox_start():
-    global _terabox_engine
-
-    if terabox_state['status'] in ('downloading', 'uploading', 'fetching_info'):
-        return jsonify({'success': False, 'error': 'Đang có tiến trình chạy. Vui lòng đợi hoặc dừng trước.'})
-
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    dest = data.get('destination', '').strip()
-
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Terabox'})
-    if not dest:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
-
-    # Read cookie
-    if not os.path.exists(TERABOX_COOKIE_FILE):
-        return jsonify({'success': False, 'error': 'Chưa cấu hình cookie.'})
-    with open(TERABOX_COOKIE_FILE, 'r') as f:
-        cookie = f.read().strip()
-    if not cookie:
-        return jsonify({'success': False, 'error': 'Cookie trống.'})
-
-    # Convert Google Drive URL to gc: format
-    dest_converted = dest
-    if 'drive.google.com' in dest:
-        m = re.search(r'/folders/([A-Za-z0-9_-]{15,})', dest.split('?')[0])
-        if m:
-            dest_converted = 'gc:' + m.group(1)
-
-    # Reset state
-    terabox_state.update({
-        'status': 'fetching_info',
-        'progress': 0,
-        'message': 'Khởi tạo...',
-        'file_name': '',
-        'file_size': 0,
-        'file_size_human': '',
-        'phase': 'info',
-        'logs': [],
-        'stop_flag': False,
-        'current_index': 0,
-        'total_items': 0
-    })
-
-    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
-
-    def _run_pipeline():
-        try:
-            success = _terabox_engine.run_full_pipeline(url, cookie, dest_converted)
-            if _terabox_stop_checker():
-                terabox_state['status'] = 'stopped'
-                terabox_state['message'] = 'Đã dừng bởi người dùng.'
-            elif success:
-                terabox_state['status'] = 'done'
-                terabox_state['phase'] = 'done'
-                terabox_state['message'] = 'Hoàn tất! File đã được copy lên Google Drive.'
-                terabox_state['progress'] = 100
-            elif terabox_state.get('status') == 'paused':
-                if not terabox_state['message']:
-                    terabox_state['message'] = 'Đang tạm dừng. Cập nhật cookie rồi bấm Bắt đầu tải để resume.'
-            else:
-                terabox_state['status'] = 'error'
-                terabox_state['phase'] = 'error'
-                if not terabox_state['message']:
-                    terabox_state['message'] = 'Tải thất bại. Xem console để biết chi tiết.'
-        except Exception as e:
-            terabox_state['status'] = 'error'
-            terabox_state['phase'] = 'error'
-            terabox_state['message'] = 'Lỗi: {0}'.format(str(e))
-
-    t = threading.Thread(target=_run_pipeline, daemon=True)
-    t.start()
-
-    return jsonify({'success': True, 'message': 'Đã bắt đầu tải'})
-
-
-@app.route('/api/terabox/status', methods=['GET'])
-def terabox_status():
-    return jsonify({
-        'status': terabox_state['status'],
-        'progress': terabox_state['progress'],
-        'message': terabox_state['message'],
-        'file_name': terabox_state['file_name'],
-        'file_size': terabox_state['file_size'],
-        'file_size_human': terabox_state['file_size_human'],
-        'phase': terabox_state['phase'],
-        'logs': terabox_state['logs'][-50:],
-        'current_index': terabox_state.get('current_index', 0),
-        'total_items': terabox_state.get('total_items', 0),
-    })
-
-
-@app.route('/api/terabox/stop', methods=['POST'])
-def terabox_stop():
-    global _terabox_engine
-    terabox_state['stop_flag'] = True
-    if _terabox_engine:
-        _terabox_engine.stop()
-    terabox_state['status'] = 'stopped'
-    terabox_state['message'] = 'Đã dừng bởi người dùng.'
-    return jsonify({'success': True})
-
-
-@app.route('/api/terabox/reset', methods=['POST'])
-def terabox_reset():
-    global _terabox_engine
-    data = request.get_json(force=True, silent=True) or {}
-    delete_files = bool(data.get('delete_files', False))
-    active = terabox_state.get('status') in ('fetching_info', 'downloading', 'uploading')
-
-    if active:
-        return jsonify({
-            'success': False,
-            'error': 'Terabox đang chạy. Hãy bấm Dừng trước khi reset.'
-        }), 400
-
-    deleted = False
-    if delete_files and os.path.exists(TERABOX_TMP_ROOT):
-        try:
-            shutil.rmtree(TERABOX_TMP_ROOT, ignore_errors=True)
-            deleted = True
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-
-    if _terabox_engine:
-        _terabox_engine.stop()
-    _terabox_engine = None
-    _reset_terabox_state()
-
-    return jsonify({
-        'success': True,
-        'message': 'Đã reset trạng thái Terabox',
-        'deleted_files': deleted
-    })
+# Removed obsolete individual Terabox routes
 
 
 # ==================== FSHARE MODULE (Completely Isolated) ====================
@@ -1518,141 +1412,7 @@ def fshare_config():
     return jsonify(_load_fshare_config(include_secret=False))
 
 
-@app.route('/api/fshare/info', methods=['POST'])
-def fshare_info():
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    file_password = data.get('file_password', '').strip()
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Fshare'})
-
-    engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
-    info = engine.get_file_info(url, _load_fshare_config(include_secret=True), file_password)
-    if 'error' in info:
-        return jsonify({'success': False, 'error': info['error']})
-    return jsonify(info)
-
-
-@app.route('/api/fshare/start', methods=['POST'])
-def fshare_start():
-    global _fshare_engine
-
-    if fshare_state['status'] in ('fetching_info', 'downloading', 'uploading'):
-        return jsonify({'success': False, 'error': 'Đang có tiến trình Fshare chạy. Vui lòng đợi hoặc dừng trước.'})
-
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    dest = data.get('destination', '').strip()
-    file_password = data.get('file_password', '').strip()
-
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Fshare'})
-    if not dest:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
-
-    config = _load_fshare_config(include_secret=True)
-    missing = [k for k in ['email', 'password'] if not config.get(k)]
-    if missing:
-        return jsonify({'success': False, 'error': 'Chưa cấu hình Fshare: ' + ', '.join(missing)})
-
-    dest_converted = dest
-    if 'drive.google.com' in dest:
-        fid = extract_drive_id(dest)
-        if fid:
-            dest_converted = 'gc:' + fid
-
-    fshare_state.update({
-        'status': 'fetching_info',
-        'progress': 0,
-        'message': 'Khởi tạo Fshare...',
-        'file_name': '',
-        'file_size': 0,
-        'file_size_human': '',
-        'phase': 'info',
-        'logs': [],
-        'stop_flag': False,
-        'current_index': 0,
-        'total_items': 0
-    })
-
-    _fshare_engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
-
-    def _run_pipeline():
-        try:
-            success = _fshare_engine.run_full_pipeline(url, config, dest_converted, file_password)
-            if _fshare_stop_checker():
-                fshare_state['status'] = 'stopped'
-                fshare_state['message'] = 'Đã dừng bởi người dùng.'
-            elif success:
-                fshare_state['status'] = 'done'
-                fshare_state['phase'] = 'done'
-                fshare_state['message'] = 'Hoàn tất! File Fshare đã được copy lên Google Drive.'
-                fshare_state['progress'] = 100
-            else:
-                fshare_state['status'] = 'error'
-                fshare_state['phase'] = 'error'
-                if not fshare_state['message']:
-                    fshare_state['message'] = 'Tải Fshare thất bại. Xem console để biết chi tiết.'
-        except Exception as e:
-            fshare_state['status'] = 'error'
-            fshare_state['phase'] = 'error'
-            fshare_state['message'] = 'Lỗi: {0}'.format(str(e))
-
-    t = threading.Thread(target=_run_pipeline, daemon=True)
-    t.start()
-    return jsonify({'success': True, 'message': 'Đã bắt đầu tải Fshare'})
-
-
-@app.route('/api/fshare/status', methods=['GET'])
-def fshare_status():
-    return jsonify({
-        'status': fshare_state['status'],
-        'progress': fshare_state['progress'],
-        'message': fshare_state['message'],
-        'file_name': fshare_state['file_name'],
-        'file_size': fshare_state['file_size'],
-        'file_size_human': fshare_state['file_size_human'],
-        'phase': fshare_state['phase'],
-        'logs': fshare_state['logs'][-50:],
-        'current_index': fshare_state.get('current_index', 0),
-        'total_items': fshare_state.get('total_items', 0),
-    })
-
-
-@app.route('/api/fshare/stop', methods=['POST'])
-def fshare_stop():
-    global _fshare_engine
-    fshare_state['stop_flag'] = True
-    if _fshare_engine:
-        _fshare_engine.stop()
-    fshare_state['status'] = 'stopped'
-    fshare_state['message'] = 'Đã dừng bởi người dùng.'
-    return jsonify({'success': True})
-
-
-@app.route('/api/fshare/reset', methods=['POST'])
-def fshare_reset():
-    global _fshare_engine
-    data = request.get_json(force=True, silent=True) or {}
-    delete_files = bool(data.get('delete_files', False))
-    active = fshare_state.get('status') in ('fetching_info', 'downloading', 'uploading')
-
-    if active:
-        return jsonify({'success': False, 'error': 'Fshare đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
-
-    deleted = False
-    if delete_files and os.path.exists(FSHARE_TMP_ROOT):
-        try:
-            shutil.rmtree(FSHARE_TMP_ROOT, ignore_errors=True)
-            deleted = True
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-
-    if _fshare_engine:
-        _fshare_engine.stop()
-    _fshare_engine = None
-    _reset_fshare_state()
-    return jsonify({'success': True, 'message': 'Đã reset trạng thái Fshare', 'deleted_files': deleted})
+# Removed obsolete individual Fshare routes
 
 
 # ==================== MEDIAFIRE MODULE (Completely Isolated) ====================
@@ -1719,136 +1479,7 @@ def _mediafire_stop_checker():
     return mediafire_state.get('stop_flag', False)
 
 
-@app.route('/api/mediafire/info', methods=['POST'])
-def mediafire_info():
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link MediaFire'})
-
-    engine = MediaFireEngine(lambda percent, message: None,
-                             lambda level, message: None,
-                             _mediafire_stop_checker)
-    info = engine.get_input_info(url)
-    if 'error' in info:
-        return jsonify({'success': False, 'error': info['error']})
-    return jsonify(info)
-
-
-@app.route('/api/mediafire/start', methods=['POST'])
-def mediafire_start():
-    global _mediafire_engine
-
-    if mediafire_state['status'] in ('fetching_info', 'downloading', 'uploading'):
-        return jsonify({'success': False, 'error': 'Đang có tiến trình MediaFire chạy. Vui lòng đợi hoặc dừng trước.'})
-
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    dest = data.get('destination', '').strip()
-
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link MediaFire'})
-    if not dest:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
-
-    dest_converted = dest
-    if 'drive.google.com' in dest:
-        fid = extract_drive_id(dest)
-        if fid:
-            dest_converted = 'gc:' + fid
-
-    mediafire_state.update({
-        'status': 'fetching_info',
-        'progress': 0,
-        'message': 'Khởi tạo MediaFire...',
-        'file_name': '',
-        'file_size': 0,
-        'file_size_human': '',
-        'phase': 'info',
-        'logs': [],
-        'stop_flag': False,
-        'current_index': 0,
-        'total_items': 0
-    })
-
-    _mediafire_engine = MediaFireEngine(_mediafire_progress, _mediafire_log, _mediafire_stop_checker, _mediafire_state_update)
-
-    def _run_pipeline():
-        try:
-            success = _mediafire_engine.run_full_pipeline(url, dest_converted)
-            if _mediafire_stop_checker():
-                mediafire_state['status'] = 'stopped'
-                mediafire_state['message'] = 'Đã dừng bởi người dùng.'
-            elif success:
-                mediafire_state['status'] = 'done'
-                mediafire_state['phase'] = 'done'
-                mediafire_state['message'] = 'Hoàn tất! File MediaFire đã được copy lên Google Drive.'
-                mediafire_state['progress'] = 100
-            else:
-                mediafire_state['status'] = 'error'
-                mediafire_state['phase'] = 'error'
-                if not mediafire_state['message']:
-                    mediafire_state['message'] = 'Tải MediaFire thất bại. Xem console để biết chi tiết.'
-        except Exception as e:
-            mediafire_state['status'] = 'error'
-            mediafire_state['phase'] = 'error'
-            mediafire_state['message'] = 'Lỗi: {0}'.format(str(e))
-
-    t = threading.Thread(target=_run_pipeline, daemon=True)
-    t.start()
-    return jsonify({'success': True, 'message': 'Đã bắt đầu tải MediaFire'})
-
-
-@app.route('/api/mediafire/status', methods=['GET'])
-def mediafire_status():
-    return jsonify({
-        'status': mediafire_state['status'],
-        'progress': mediafire_state['progress'],
-        'message': mediafire_state['message'],
-        'file_name': mediafire_state['file_name'],
-        'file_size': mediafire_state['file_size'],
-        'file_size_human': mediafire_state['file_size_human'],
-        'phase': mediafire_state['phase'],
-        'current_index': mediafire_state.get('current_index', 0),
-        'total_items': mediafire_state.get('total_items', 0),
-        'logs': mediafire_state['logs'][-50:],
-    })
-
-
-@app.route('/api/mediafire/stop', methods=['POST'])
-def mediafire_stop():
-    global _mediafire_engine
-    mediafire_state['stop_flag'] = True
-    if _mediafire_engine:
-        _mediafire_engine.stop()
-    mediafire_state['status'] = 'stopped'
-    mediafire_state['message'] = 'Đã dừng bởi người dùng.'
-    return jsonify({'success': True})
-
-
-@app.route('/api/mediafire/reset', methods=['POST'])
-def mediafire_reset():
-    global _mediafire_engine
-    data = request.get_json(force=True, silent=True) or {}
-    delete_files = bool(data.get('delete_files', False))
-    active = mediafire_state.get('status') in ('fetching_info', 'downloading', 'uploading')
-
-    if active:
-        return jsonify({'success': False, 'error': 'MediaFire đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
-
-    deleted = False
-    if delete_files and os.path.exists(MEDIAFIRE_TMP_ROOT):
-        try:
-            shutil.rmtree(MEDIAFIRE_TMP_ROOT, ignore_errors=True)
-            deleted = True
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-
-    if _mediafire_engine:
-        _mediafire_engine.stop()
-    _mediafire_engine = None
-    _reset_mediafire_state()
-    return jsonify({'success': True, 'message': 'Đã reset trạng thái MediaFire', 'deleted_files': deleted})
+# Removed obsolete individual MediaFire routes
 
 
 # ==================== MEGA MODULE (Completely Isolated) ====================
@@ -1917,136 +1548,7 @@ def _mega_stop_checker():
     return mega_state.get('stop_flag', False)
 
 
-@app.route('/api/mega/info', methods=['POST'])
-def mega_info():
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Mega.nz'})
-
-    engine = MegaEngine(lambda percent, message: None,
-                        lambda level, message: None,
-                        _mega_stop_checker)
-    info = engine.get_folder_info(url)
-    if 'error' in info:
-        return jsonify({'success': False, 'error': info['error']})
-    return jsonify(info)
-
-
-@app.route('/api/mega/start', methods=['POST'])
-def mega_start():
-    global _mega_engine
-
-    if mega_state['status'] in ('fetching_info', 'downloading', 'uploading'):
-        return jsonify({'success': False, 'error': 'Đang có tiến trình Mega đang chạy. Vui lòng đợi hoặc dừng trước.'})
-
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('url', '').strip()
-    dest = data.get('destination', '').strip()
-
-    if not url:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập link Mega.nz'})
-    if not dest:
-        return jsonify({'success': False, 'error': 'Vui lòng nhập đường dẫn đích Google Drive'})
-
-    dest_converted = dest
-    if 'drive.google.com' in dest:
-        fid = extract_drive_id(dest)
-        if fid:
-            dest_converted = 'gc:' + fid
-
-    mega_state.update({
-        'status': 'fetching_info',
-        'progress': 0,
-        'message': 'Khởi tạo Mega...',
-        'file_name': '',
-        'file_size': 0,
-        'file_size_human': '',
-        'phase': 'info',
-        'logs': [],
-        'stop_flag': False,
-        'current_index': 0,
-        'total_items': 0
-    })
-
-    _mega_engine = MegaEngine(_mega_progress, _mega_log, _mega_stop_checker, _mega_state_update)
-
-    def _run_pipeline():
-        try:
-            success = _mega_engine.run_full_pipeline(url, dest_converted)
-            if _mega_stop_checker():
-                mega_state['status'] = 'stopped'
-                mega_state['message'] = 'Đã dừng bởi người dùng.'
-            elif success:
-                mega_state['status'] = 'done'
-                mega_state['phase'] = 'done'
-                mega_state['message'] = 'Hoàn tất! File từ Mega đã được copy lên Google Drive.'
-                mega_state['progress'] = 100
-            else:
-                mega_state['status'] = 'error'
-                mega_state['phase'] = 'error'
-                if not mega_state['message']:
-                    mega_state['message'] = 'Tải từ Mega thất bại. Xem console để biết chi tiết.'
-        except Exception as e:
-            mega_state['status'] = 'error'
-            mega_state['phase'] = 'error'
-            mega_state['message'] = 'Lỗi: {0}'.format(str(e))
-
-    t = threading.Thread(target=_run_pipeline, daemon=True)
-    t.start()
-    return jsonify({'success': True, 'message': 'Đã bắt đầu tải Mega'})
-
-
-@app.route('/api/mega/status', methods=['GET'])
-def mega_status():
-    return jsonify({
-        'status': mega_state['status'],
-        'progress': mega_state['progress'],
-        'message': mega_state['message'],
-        'file_name': mega_state['file_name'],
-        'file_size': mega_state['file_size'],
-        'file_size_human': mega_state['file_size_human'],
-        'phase': mega_state['phase'],
-        'current_index': mega_state.get('current_index', 0),
-        'total_items': mega_state.get('total_items', 0),
-        'logs': mega_state['logs'][-50:],
-    })
-
-
-@app.route('/api/mega/stop', methods=['POST'])
-def mega_stop():
-    global _mega_engine
-    mega_state['stop_flag'] = True
-    if _mega_engine:
-        _mega_engine.stop()
-    mega_state['status'] = 'stopped'
-    mega_state['message'] = 'Đã dừng bởi người dùng.'
-    return jsonify({'success': True})
-
-
-@app.route('/api/mega/reset', methods=['POST'])
-def mega_reset():
-    global _mega_engine
-    data = request.get_json(force=True, silent=True) or {}
-    delete_files = bool(data.get('delete_files', False))
-    active = mega_state.get('status') in ('fetching_info', 'downloading', 'uploading')
-
-    if active:
-        return jsonify({'success': False, 'error': 'Tiến trình Mega đang chạy. Hãy bấm Dừng trước khi reset.'}), 400
-
-    deleted = False
-    if delete_files and os.path.exists(MEGA_TMP_ROOT):
-        try:
-            shutil.rmtree(MEGA_TMP_ROOT, ignore_errors=True)
-            deleted = True
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-
-    if _mega_engine:
-        _mega_engine.stop()
-    _mega_engine = None
-    _reset_mega_state()
-    return jsonify({'success': True, 'message': 'Đã reset trạng thái Mega', 'deleted_files': deleted})
+# Removed obsolete individual Mega routes
 
 
 if __name__ == '__main__':

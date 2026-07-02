@@ -671,3 +671,42 @@ textarea:focus {
         flex-direction: column;
     }
 }
+
+/* ==================== STATUS BADGES ==================== */
+.badge-status-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    transition: all 0.2s ease;
+}
+.badge-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #64748b;
+    display: inline-block;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+.badge-indicator.active {
+    background: var(--success) !important;
+    box-shadow: 0 0 8px var(--success);
+}
+.badge-indicator.inactive {
+    background: var(--danger) !important;
+    box-shadow: 0 0 8px var(--danger);
+}
+.badge-indicator.checking {
+    background: var(--warning) !important;
+    box-shadow: 0 0 8px var(--warning);
+    animation: badgePulse 1s infinite alternate;
+}
+@keyframes badgePulse {
+    from { opacity: 0.6; }
+    to { opacity: 1; }
+}

@@ -10,6 +10,7 @@ const progressBar = document.getElementById('progressBar');
 const progressPercent = document.getElementById('progressPercent');
 const sizeInfo = document.getElementById('sizeInfo');
 const filesListBody = document.getElementById('filesListBody');
+const clearTempBtn = document.getElementById('clearTempBtn');
 
 let isPolling = false;
 
@@ -87,12 +88,16 @@ downloadBtn.addEventListener('click', async () => {
             return;
         }
 
+        const filePasswordInput = document.getElementById('file_password');
+        const filePassword = filePasswordInput ? filePasswordInput.value.trim() : '';
+
         // Send raw URLs to backend (backend will parse gc:ID and scrape titles)
         const wrapCheckbox = document.getElementById('wrapParentFolder');
         const payloadData = {
             url: urlInput.value,
             output_dir: outputDir,
-            wrap: wrapCheckbox ? wrapCheckbox.checked : false
+            wrap: wrapCheckbox ? wrapCheckbox.checked : false,
+            file_password: filePassword
         };
 
         const oldText = downloadBtn.querySelector('.btn-text').textContent;
@@ -123,6 +128,7 @@ downloadBtn.addEventListener('click', async () => {
         saveDestHistory(outputDir);
 
         urlInput.value = ''; // Clear source to allow adding more
+        if (filePasswordInput) filePasswordInput.value = ''; // Clear file password too
 
         // Cleanup UI button
         downloadBtn.querySelector('.btn-text').textContent = "Thêm vào Queue (Copy)";
@@ -503,9 +509,148 @@ function updateBreadcrumb() {
     }
 })();
 
+// ==================== CLEAR TEMP ACTION ====================
+if (clearTempBtn) {
+    clearTempBtn.addEventListener('click', async () => {
+        if (!confirm('Bạn có chắc chắn muốn dừng toàn bộ tiến trình đang chạy và xóa tất cả file tạm thời?')) {
+            return;
+        }
+        try {
+            clearTempBtn.disabled = true;
+            clearTempBtn.querySelector('.btn-text').textContent = 'Đang xóa...';
+            const resp = await fetch('/api/clear_temp', { method: 'POST' });
+            const data = await resp.json();
+            alert(data.message || 'Đã dọn dẹp xong!');
+        } catch (e) {
+            console.error(e);
+            alert('Lỗi khi dọn dẹp file tạm: ' + e.message);
+        } finally {
+            clearTempBtn.disabled = false;
+            clearTempBtn.querySelector('.btn-text').textContent = '🧹 Xóa file tạm';
+        }
+    });
+}
+
+// ==================== CONFIG STATUS BADGES ====================
+function checkConfigStatus() {
+    fetch('/api/fshare/config')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('badgeFshareIndicator');
+            const text = document.getElementById('badgeFshareText');
+            if (indicator && text) {
+                if (data.complete) {
+                    indicator.className = 'badge-indicator active';
+                    text.textContent = data.email || 'VIP';
+                } else {
+                    indicator.className = 'badge-indicator inactive';
+                    text.textContent = 'Chưa cấu hình';
+                }
+            }
+        })
+        .catch(() => {
+            const indicator = document.getElementById('badgeFshareIndicator');
+            const text = document.getElementById('badgeFshareText');
+            if (indicator && text) {
+                indicator.className = 'badge-indicator inactive';
+                text.textContent = 'Lỗi kết nối';
+            }
+        });
+
+    fetch('/api/terabox/cookie')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('badgeTeraboxIndicator');
+            const text = document.getElementById('badgeTeraboxText');
+            if (indicator && text) {
+                if (data.has_cookie) {
+                    indicator.className = 'badge-indicator active';
+                    text.textContent = 'Đã cấu hình';
+                } else {
+                    indicator.className = 'badge-indicator inactive';
+                    text.textContent = 'Chưa cấu hình';
+                }
+            }
+        })
+        .catch(() => {
+            const indicator = document.getElementById('badgeTeraboxIndicator');
+            const text = document.getElementById('badgeTeraboxText');
+            if (indicator && text) {
+                indicator.className = 'badge-indicator inactive';
+                text.textContent = 'Lỗi kết nối';
+            }
+        });
+}
+
+// ==================== TERABOX COOKIE CONFIG ====================
+function tbLoadCookie() {
+    fetch('/api/terabox/cookie')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            const tbCookieStatus = document.getElementById('teraboxCookieStatus');
+            if (data.has_cookie) {
+                if (tbCookieStatus) {
+                    tbCookieStatus.innerHTML = '✅ Cookie đã lưu (<code>' + data.masked + '</code>)';
+                    tbCookieStatus.style.color = '#22c55e';
+                }
+            } else {
+                if (tbCookieStatus) {
+                    tbCookieStatus.innerHTML = '⚠️ Chưa có cookie. Vui lòng nhập và lưu.';
+                    tbCookieStatus.style.color = '#f59e0b';
+                }
+            }
+            checkConfigStatus();
+        })
+        .catch(function () {
+            const tbCookieStatus = document.getElementById('teraboxCookieStatus');
+            if (tbCookieStatus) {
+                tbCookieStatus.textContent = '❌ Không thể kiểm tra cookie.';
+                tbCookieStatus.style.color = '#ef4444';
+            }
+        });
+}
+
+function tbSaveCookie() {
+    const tbCookieInput = document.getElementById('teraboxCookie');
+    const tbSaveCookieBtn = document.getElementById('teraboxSaveCookieBtn');
+    if (!tbCookieInput || !tbSaveCookieBtn) return;
+    var val = tbCookieInput.value.trim();
+    if (!val) {
+        alert('Vui lòng nhập cookie ndus!');
+        return;
+    }
+    tbSaveCookieBtn.disabled = true;
+    tbSaveCookieBtn.textContent = '⏳ Đang lưu...';
+
+    fetch('/api/terabox/cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie: val })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                tbCookieInput.value = '';
+                tbLoadCookie();
+            } else {
+                alert('Lỗi: ' + (data.error || 'Không rõ'));
+            }
+        })
+        .catch(function (e) { alert('Lỗi kết nối: ' + e); })
+        .finally(function () {
+            tbSaveCookieBtn.disabled = false;
+            tbSaveCookieBtn.textContent = '💾 Lưu';
+        });
+}
+
+var tbSaveCookieBtn = document.getElementById('teraboxSaveCookieBtn');
+if (tbSaveCookieBtn) {
+    tbSaveCookieBtn.addEventListener('click', tbSaveCookie);
+}
 
 // ==================== FSHARE TAB ====================
 (function () {
+    return; // Obsolete, replaced by unified transfer queue
     var fsAccountStatus = document.getElementById('fshareAccountStatus');
     var fsUrlInput = document.getElementById('fshareUrl');
     var fsPasswordInput = document.getElementById('fshareFilePassword');
@@ -908,6 +1053,7 @@ function updateBreadcrumb() {
 
 // ==================== MEDIAFIRE TAB ====================
 (function () {
+    return; // Obsolete, replaced by unified transfer queue
     var mfUrlInput = document.getElementById('mediafireUrl');
     var mfDestInput = document.getElementById('mediafireDest');
     var mfCheckBtn = document.getElementById('mediafireCheckBtn');
@@ -1291,6 +1437,7 @@ function updateBreadcrumb() {
 
 // ==================== MEGA TAB ====================
 (function () {
+    return; // Obsolete, replaced by unified transfer queue
     var megaUrlInput = document.getElementById('megaUrl');
     var megaDestInput = document.getElementById('megaDest');
     var megaCheckBtn = document.getElementById('megaCheckBtn');
@@ -2451,11 +2598,16 @@ window.addEventListener('DOMContentLoaded', async () => {
             }
         });
     }
+
+    // Initialize config status badges and terabox cookie details
+    checkConfigStatus();
+    tbLoadCookie();
 });
 
 
 // ==================== TERABOX TAB ====================
 (function () {
+    return; // Obsolete, replaced by unified transfer queue
     // DOM elements
     var tbCookieInput = document.getElementById('teraboxCookie');
     var tbSaveCookieBtn = document.getElementById('teraboxSaveCookieBtn');

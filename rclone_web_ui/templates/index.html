@@ -52,36 +52,7 @@
                 </svg>
                 Cấu hình
             </button>
-            <button class="tab-btn" data-tab="terabox">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="17 8 12 3 7 8"/>
-                    <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                Terabox
-            </button>
-            <button class="tab-btn" data-tab="fshare">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
-                    <polyline points="7 9 12 4 17 9"/>
-                    <line x1="12" y1="4" x2="12" y2="16"/>
-                </svg>
-                Fshare
-            </button>
-            <button class="tab-btn" data-tab="mediafire">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                MediaFire
-            </button>
-            <button class="tab-btn" data-tab="mega">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
-                </svg>
-                Mega
-            </button>
+
             <button class="tab-btn" data-tab="history">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
@@ -93,10 +64,22 @@
         <!-- ========== TAB: TRANSFER ========== -->
         <div class="tab-content active" id="tab-transfer">
             <section class="card input-section">
+                <!-- Status Badges -->
+                <div style="display: flex; gap: 10px; margin-bottom: 5px; flex-wrap: wrap;">
+                    <div class="badge-status-box">
+                        <span class="badge-indicator" id="badgeFshareIndicator"></span>
+                        <span>Fshare VIP: <strong id="badgeFshareText">Kiểm tra...</strong></span>
+                    </div>
+                    <div class="badge-status-box">
+                        <span class="badge-indicator" id="badgeTeraboxIndicator"></span>
+                        <span>Terabox Cookie: <strong id="badgeTeraboxText">Kiểm tra...</strong></span>
+                    </div>
+                </div>
+
                 <div class="input-group">
-                    <label for="url">Source (Mỗi dòng 1 link Google Drive hoặc gc:...)</label>
+                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire...)</label>
                     <textarea id="url" rows="5"
-                        placeholder="Paste link Google Drive hoặc gc:{folder_id} ở đây...&#10;VD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD: gc:1glGXeitkt0wlSvT4polGm50MVBDJAWuz"
+                        placeholder="Paste link nguồn ở đây (mỗi dòng 1 link)...&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY"
                         autocomplete="off"></textarea>
                     <div style="margin-top: 8px;">
                         <label
@@ -122,13 +105,22 @@
                     </div>
                 </div>
 
-                <div style="display: flex; gap: 10px;">
-                    <button id="downloadBtn" class="btn-primary" style="flex: 2;">
+                <div class="input-group">
+                    <label for="file_password">Mật khẩu file (nếu có - vd Fshare/Terabox)</label>
+                    <input type="password" id="file_password" placeholder="Để trống nếu file không có mật khẩu" autocomplete="new-password">
+                </div>
+
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button id="downloadBtn" class="btn-primary" style="flex: 2; min-width: 180px;">
                         <span class="btn-text">Thêm vào Queue (Copy)</span>
                     </button>
                     <button id="stopBtn" type="button" class="btn-secondary"
-                        style="flex: 1; display: none; border-color: #ef4444; color: #ef4444;">
-                        <span class="btn-text">Dừng tiến trình đang chạy</span>
+                        style="flex: 1; display: none; border-color: #ef4444; color: #ef4444; min-width: 120px;">
+                        <span class="btn-text">Dừng tiến trình</span>
+                    </button>
+                    <button id="clearTempBtn" type="button" class="btn-secondary"
+                        style="flex: 1; border-color: #f59e0b; color: #f59e0b; min-width: 120px;">
+                        <span class="btn-text">🧹 Xóa file tạm</span>
                     </button>
                 </div>
             </section>
@@ -458,402 +450,7 @@
             </div>
         </div>
 
-        <!-- ========== TAB: TERABOX ========== -->
-        <div class="tab-content" id="tab-terabox">
-            <!-- Card 1: Intro & status -->
-            <section class="card input-section" id="teraboxIntroSection">
-                <div class="config-header" style="margin-bottom: 15px;">
-                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="17 8 12 3 7 8"/>
-                            <line x1="12" y1="3" x2="12" y2="15"/>
-                        </svg> Terabox → Google Drive</h3>
-                    <p class="config-desc">Tải file từ Terabox về VPS rồi tự động đẩy lên Google Drive.</p>
-                </div>
-                <div id="teraboxAccountStatus" style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
-                    Đang kiểm tra cấu hình Terabox...
-                </div>
-            </section>
 
-            <!-- Card 2: Download Form -->
-            <section class="card input-section">
-                <div class="input-group">
-                    <label for="teraboxUrl">Link Terabox</label>
-                    <textarea id="teraboxUrl" rows="5" placeholder="Paste link Terabox ở đây (mỗi dòng 1 link)...&#10;VD: https://www.terabox.app/s/1xyz..." autocomplete="off"></textarea>
-                </div>
-
-                <!-- File info (hidden until check) -->
-                <div id="teraboxFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: 500;" id="teraboxFileName">—</div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="teraboxFileSize">—</div>
-                        </div>
-                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
-                    </div>
-                </div>
-
-                <div class="input-group">
-                    <label for="teraboxDest">Destination Google Drive (Nơi nhận)</label>
-                    <input type="text" id="teraboxDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn-secondary btn-browse-drive" data-target="teraboxDest"
-                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px;">
-                    <button id="teraboxCheckBtn" class="btn-secondary" style="flex: 1;">
-                        🔍 Kiểm tra link
-                    </button>
-                    <button id="teraboxQueueBtn" class="btn-secondary" style="flex: 1.5;">
-                        ⏳ Thêm hàng đợi
-                    </button>
-                    <button id="teraboxStartBtn" class="btn-primary" style="flex: 1.5;">
-                        🚀 Bắt đầu tải
-                    </button>
-                </div>
-            </section>
-
-            <!-- Card 3: Progress (hidden by default) -->
-            <section class="card status-section" id="teraboxStatusSection" style="display: none;">
-                <div class="status-header">
-                    <h3 id="teraboxStatusText">Đang xử lý...</h3>
-                    <span id="teraboxPhaseText" class="file-name" style="font-size: 0.85rem;"></span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" id="teraboxProgressBar"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="teraboxProgressPercent">0%</span>
-                        <span id="teraboxProgressDetail"></span>
-                    </div>
-                </div>
-
-                <div class="console-container"
-                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
-                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
-                        >_ Terabox Console
-                    </div>
-                    <div id="teraboxConsole"
-                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
-                        Đang chờ...
-                    </div>
-                </div>
-
-                <button id="teraboxStopBtn" class="btn-secondary"
-                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
-                    ⏹ Dừng tiến trình
-                </button>
-                <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button id="teraboxResetBtn" class="btn-secondary" style="flex: 1;">
-                        Xóa trạng thái
-                    </button>
-                    <button id="teraboxClearTempBtn" class="btn-secondary"
-                        style="flex: 1; border-color: #ef4444; color: #ef4444;">
-                        Xóa file tạm
-                    </button>
-                </div>
-            </section>
-        </div>
-
-        <!-- ========== TAB: FSHARE ========== -->
-        <div class="tab-content" id="tab-fshare">
-            <section class="card input-section" id="fshareAccountSection">
-                <div class="config-header" style="margin-bottom: 15px;">
-                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
-                            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
-                            <polyline points="7 9 12 4 17 9"/>
-                            <line x1="12" y1="4" x2="12" y2="16"/>
-                        </svg> Fshare → Google Drive</h3>
-                    <p class="config-desc">Tải file từ Fshare bằng tài khoản VIP rồi tự động đẩy lên Google Drive.</p>
-                </div>
-                <div id="fshareAccountStatus" style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
-                    Đang kiểm tra cấu hình Fshare...
-                </div>
-            </section>
-
-            <section class="card input-section">
-                <div class="input-group">
-                    <label for="fshareUrl">Link Fshare</label>
-                    <textarea id="fshareUrl" rows="5" placeholder="Paste link Fshare ở đây (mỗi dòng 1 link)...&#10;VD: https://www.fshare.vn/file/ABC..." autocomplete="off"></textarea>
-                </div>
-                <div class="input-group">
-                    <label for="fshareFilePassword">Mật khẩu file Fshare (nếu có)</label>
-                    <input type="password" id="fshareFilePassword" placeholder="Để trống nếu file không khóa mật khẩu" autocomplete="off">
-                </div>
-
-                <div id="fshareFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: 500;" id="fshareFileName">—</div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="fshareFileSize">—</div>
-                        </div>
-                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
-                    </div>
-                </div>
-
-                <div class="input-group">
-                    <label for="fshareDest">Destination Google Drive (Nơi nhận)</label>
-                    <input type="text" id="fshareDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn-secondary btn-browse-drive" data-target="fshareDest"
-                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px;">
-                    <button id="fshareCheckBtn" class="btn-secondary" style="flex: 1;">
-                        🔍 Kiểm tra link
-                    </button>
-                    <button id="fshareQueueBtn" class="btn-secondary" style="flex: 1.5;">
-                        ⏳ Thêm hàng đợi
-                    </button>
-                    <button id="fshareStartBtn" class="btn-primary" style="flex: 1.5;">
-                        🚀 Bắt đầu tải
-                    </button>
-                </div>
-            </section>
-
-            <section class="card status-section" id="fshareStatusSection" style="display: none;">
-                <div class="status-header">
-                    <h3 id="fshareStatusText">Đang xử lý...</h3>
-                    <span id="fsharePhaseText" class="file-name" style="font-size: 0.85rem;"></span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" id="fshareProgressBar"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="fshareProgressPercent">0%</span>
-                        <span id="fshareProgressDetail"></span>
-                    </div>
-                </div>
-
-                <div class="console-container"
-                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
-                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
-                        >_ Fshare Console
-                    </div>
-                    <div id="fshareConsole"
-                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
-                        Đang chờ...
-                    </div>
-                </div>
-
-                <button id="fshareStopBtn" class="btn-secondary"
-                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
-                    ⏹ Dừng tiến trình
-                </button>
-                <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button id="fshareResetBtn" class="btn-secondary" style="flex: 1;">
-                        Xóa trạng thái
-                    </button>
-                    <button id="fshareClearTempBtn" class="btn-secondary"
-                        style="flex: 1; border-color: #ef4444; color: #ef4444;">
-                        Xóa file tạm
-                    </button>
-                </div>
-            </section>
-        </div>
-
-        <!-- ========== TAB: MEDIAFIRE ========== -->
-        <div class="tab-content" id="tab-mediafire">
-            <section class="card input-section" id="mediafireIntroSection">
-                <div class="config-header" style="margin-bottom: 15px;">
-                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
-                            <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg> MediaFire → Google Drive</h3>
-                    <p class="config-desc">Tải file public từ MediaFire về VPS rồi tự động đẩy lên Google Drive.</p>
-                </div>
-                <div style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
-                    Có thể paste nhiều link MediaFire public, gồm cả <code>/folder/...</code> và <code>/file/...</code>. Folder sẽ được expand và tải tuần tự.
-                </div>
-            </section>
-
-            <section class="card input-section">
-                <div class="input-group">
-                    <label for="mediafireUrl">Link MediaFire</label>
-                    <textarea id="mediafireUrl" rows="8" placeholder="Mỗi dòng 1 link MediaFire folder/file..." autocomplete="off"></textarea>
-                </div>
-
-                <div id="mediafireFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: 500;" id="mediafireFileName">—</div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="mediafireFileSize">—</div>
-                        </div>
-                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
-                    </div>
-                </div>
-
-                <div class="input-group">
-                    <label for="mediafireDest">Destination Google Drive (Nơi nhận)</label>
-                    <input type="text" id="mediafireDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn-secondary btn-browse-drive" data-target="mediafireDest"
-                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px;">
-                    <button id="mediafireCheckBtn" class="btn-secondary" style="flex: 1;">
-                        🔍 Kiểm tra link
-                    </button>
-                    <button id="mediafireQueueBtn" class="btn-secondary" style="flex: 1.5;">
-                        ⏳ Thêm hàng đợi
-                    </button>
-                    <button id="mediafireStartBtn" class="btn-primary" style="flex: 1.5;">
-                        🚀 Bắt đầu tải
-                    </button>
-                </div>
-            </section>
-
-            <section class="card status-section" id="mediafireStatusSection" style="display: none;">
-                <div class="status-header">
-                    <h3 id="mediafireStatusText">Đang xử lý...</h3>
-                    <span id="mediafirePhaseText" class="file-name" style="font-size: 0.85rem;"></span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" id="mediafireProgressBar"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="mediafireProgressPercent">0%</span>
-                        <span id="mediafireProgressDetail"></span>
-                    </div>
-                </div>
-
-                <div class="console-container"
-                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
-                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
-                        >_ MediaFire Console
-                    </div>
-                    <div id="mediafireConsole"
-                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
-                        Đang chờ...
-                    </div>
-                </div>
-
-                <button id="mediafireStopBtn" class="btn-secondary"
-                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
-                    ⏹ Dừng tiến trình
-                </button>
-                <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button id="mediafireResetBtn" class="btn-secondary" style="flex: 1;">
-                        Xóa trạng thái
-                    </button>
-                    <button id="mediafireClearTempBtn" class="btn-secondary"
-                        style="flex: 1; border-color: #ef4444; color: #ef4444;">
-                        Xóa file tạm
-                    </button>
-                </div>
-            </section>
-        </div>
-
-        <div class="tab-content" id="tab-mega">
-            <section class="card input-section" id="megaIntroSection">
-                <div class="config-header" style="margin-bottom: 15px;">
-                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
-                            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
-                        </svg> Mega.nz → Google Drive</h3>
-                    <p class="config-desc">Tải thư mục public từ Mega.nz về VPS và tự động đẩy lên Google Drive.</p>
-                </div>
-                <div style="padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; font-size: 0.85rem; color: #38bdf8;">
-                    Nhập link shared folder của Mega.nz (dạng <code>https://mega.nz/folder/ID#KEY</code>). Hệ thống sẽ tự động phân tích và tải tất cả các file bên trong trong khi vẫn giữ nguyên cấu trúc cây thư mục.
-                </div>
-            </section>
-
-            <section class="card input-section">
-                <div class="input-group">
-                    <label for="megaUrl">Link Mega Thư Mục</label>
-                    <input type="text" id="megaUrl" placeholder="https://mega.nz/folder/ID#KEY..." autocomplete="off">
-                </div>
-
-                <div id="megaFileInfo" style="display: none; padding: 12px; background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); border-radius: 8px; margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: 500;" id="megaFileName">—</div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted);" id="megaFileSize">—</div>
-                        </div>
-                        <span style="color: #22c55e; font-size: 1.2rem;">✓</span>
-                    </div>
-                </div>
-
-                <div class="input-group">
-                    <label for="megaDest">Destination Google Drive (Nơi nhận)</label>
-                    <input type="text" id="megaDest" placeholder="gc:{folder_id} hoặc paste link Google Drive..." autocomplete="off">
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn-secondary btn-browse-drive" data-target="megaDest"
-                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px;">
-                    <button id="megaCheckBtn" class="btn-secondary" style="flex: 1;">
-                        🔍 Kiểm tra link
-                    </button>
-                    <button id="megaQueueBtn" class="btn-secondary" style="flex: 1.5;">
-                        ⏳ Thêm hàng đợi
-                    </button>
-                    <button id="megaStartBtn" class="btn-primary" style="flex: 1.5;">
-                        🚀 Bắt đầu tải
-                    </button>
-                </div>
-            </section>
-
-            <section class="card status-section" id="megaStatusSection" style="display: none;">
-                <div class="status-header">
-                    <h3 id="megaStatusText">Đang xử lý...</h3>
-                    <span id="megaPhaseText" class="file-name" style="font-size: 0.85rem;"></span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill" id="megaProgressBar"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="megaProgressPercent">0%</span>
-                        <span id="megaProgressDetail"></span>
-                    </div>
-                </div>
-
-                <div class="console-container"
-                    style="background-color: #0f172a; border-radius: 8px; margin-bottom: 15px; border: 1px solid #1e293b; overflow: hidden;">
-                    <div style="background-color: #1e293b; padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-family: monospace;">
-                        >_ Mega Console
-                    </div>
-                    <div id="megaConsole"
-                        style="padding: 12px; font-family: 'Consolas','Monaco',monospace; font-size: 0.8rem; color: #a5b4fc; max-height: 200px; min-height: 80px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4;">
-                        Đang chờ...
-                    </div>
-                </div>
-
-                <button id="megaStopBtn" class="btn-secondary"
-                    style="width: 100%; border-color: #ef4444; color: #ef4444;">
-                    ⏹ Dừng tiến trình
-                </button>
-                <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button id="megaResetBtn" class="btn-secondary" style="flex: 1;">
-                        Xóa trạng thái
-                    </button>
-                    <button id="megaClearTempBtn" class="btn-secondary"
-                        style="flex: 1; border-color: #ef4444; color: #ef4444;">
-                        Xóa file tạm
-                    </button>
-                </div>
-            </section>
-        </div>
 
     </main>
 
