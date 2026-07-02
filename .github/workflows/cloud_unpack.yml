@@ -1,0 +1,180 @@
+name: Cloud Unpack & Merge
+
+on:
+  repository_dispatch:
+    types: [cloud_unpack]
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space
+        run: |
+          echo "=== Disk space before clean ==="
+          df -h
+          sudo docker image prune --all --force || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          echo "=== Disk space after clean ==="
+          df -h
+
+      - name: Install Rclone & Extraction Tools
+        run: |
+          echo "=== Installing Rclone ==="
+          sudo curl https://rclone.org/install.sh | sudo bash
+          echo "=== Installing 7-Zip & Unrar ==="
+          sudo apt-get update
+          sudo apt-get install -p7zip-full unrar -y
+
+      - name: Setup Rclone Configuration
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ github.event.client_payload.rclone_conf }}" | base64 --decode > ~/.config/rclone/rclone.conf
+          rclone listremotes
+
+      - name: Download, Unpack and Upload
+        run: |
+          set -e
+          
+          # Inputs
+          REMOTE_PATH="${{ github.event.client_payload.remote_path }}"
+          MODE="${{ github.event.client_payload.mode }}"
+          PASSWORD="${{ github.event.client_payload.password }}"
+          
+          echo "=== Inputs ==="
+          echo "Remote Path: $REMOTE_PATH"
+          echo "Mode: $MODE"
+          if [ -n "$PASSWORD" ]; then
+            echo "Password: [PROTECTED]"
+          else
+            echo "Password: None"
+          fi
+          
+          # Setup directories
+          DOWNLOAD_DIR="/home/runner/download"
+          WORK_DIR="/home/runner/work"
+          EXTRACT_DIR="/home/runner/extracted"
+          mkdir -p "$DOWNLOAD_DIR" "$WORK_DIR" "$EXTRACT_DIR"
+          
+          # 1. Determine destination path and handle single file vs folder
+          # Strip trailing slash if present for parsing
+          CLEANED_PATH="${REMOTE_PATH%/}"
+          
+          # Get parent path and basename
+          PARENT_PATH=$(dirname "$CLEANED_PATH")
+          BASENAME=$(basename "$CLEANED_PATH")
+          
+          echo "Parent Path: $PARENT_PATH"
+          echo "Basename: $BASENAME"
+          
+          # Check if targeted path is a folder by using rclone lsf with --max-depth 1
+          # If it returns multiple entries or if REMOTE_PATH ends with a slash, we treat it as folder
+          IS_FOLDER=false
+          if [[ "$REMOTE_PATH" == */ ]] || ! rclone lsjson "$REMOTE_PATH" --max-depth 0 | grep -q '"IsDir":false'; then
+            IS_FOLDER=true
+          fi
+          
+          echo "Is Folder: $IS_FOLDER"
+          
+          # 2. Download files to download dir
+          if [ "$IS_FOLDER" = "true" ]; then
+            # If folder, copy matching archives
+            echo "=== Downloading folder contents ==="
+            rclone copy "$CLEANED_PATH/" "$DOWNLOAD_DIR/" \
+              --include "*.{zip,rar,7z,tar,gz,zip.*,rar.*,7z.*,z0*,part*}" \
+              --transfers 8 -P
+            DEST_PATH="$CLEANED_PATH"
+          else
+            # If file, copy the specific file or all parts of the split file
+            echo "=== Checking file type for split files ==="
+            
+            # Detect zip.001, rar.001, etc.
+            if [[ "$BASENAME" =~ \.(zip|rar|7z)\.[0-9]+$ ]]; then
+              echo "Split file detected (.001 format)"
+              # Extract prefix before the .001 (e.g. file.zip)
+              PREFIX="${BASENAME%.*}"
+              echo "Downloading all parts for: $PREFIX"
+              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.*" --transfers 8 -P
+              
+            # Detect .part1.rar or .part01.rar
+            elif [[ "$BASENAME" =~ \.part0*[1]\.rar$ ]]; then
+              echo "Split WinRAR detected (.part1.rar format)"
+              # Get prefix before part1.rar (e.g. movies.part1.rar -> movies.)
+              # Extract everything before .part
+              PREFIX=$(echo "$BASENAME" | sed -E 's/\.part0*[0-9]+\.rar//I')
+              echo "Downloading all parts starting with: $PREFIX.part"
+              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.part*.rar" --include "$PREFIX.part*.RAR" --transfers 8 -P
+              
+            # Standard single archive file
+            else
+              echo "Single archive file detected"
+              rclone copyto "$REMOTE_PATH" "$DOWNLOAD_DIR/$BASENAME" -P
+            fi
+            DEST_PATH="$PARENT_PATH"
+          fi
+          
+          # 3. Processing and Extraction
+          echo "=== Processing downloaded files ==="
+          ls -la "$DOWNLOAD_DIR"
+          
+          cd "$DOWNLOAD_DIR"
+          
+          # Find split zip/rar/7z files (.001 format) to merge first
+          SPLIT_FILES=$(find . -name "*.001" | sort)
+          if [ -n "$SPLIT_FILES" ]; then
+            for f in $SPLIT_FILES; do
+              BASE_ARCHIVE=$(basename "$f" .001)
+              echo "Merging split archive: $BASE_ARCHIVE.*"
+              cat "$BASE_ARCHIVE".[0-9]* > "$WORK_DIR/$BASE_ARCHIVE"
+              echo "Extracting merged archive: $BASE_ARCHIVE"
+              if [ -n "$PASSWORD" ]; then
+                7z x "$WORK_DIR/$BASE_ARCHIVE" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
+              else
+                7z x "$WORK_DIR/$BASE_ARCHIVE" -o"$EXTRACT_DIR" -y
+              fi
+              rm -f "$WORK_DIR/$BASE_ARCHIVE"
+            done
+          fi
+          
+          # Find split WinRAR files (.part1.rar) to extract
+          PART_RAR_FILES=$(find . -iname "*part0*1.rar" | sort)
+          if [ -n "$PART_RAR_FILES" ]; then
+            for f in $PART_RAR_FILES; do
+              echo "Extracting multipart RAR: $f"
+              if [ -n "$PASSWORD" ]; then
+                7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
+              else
+                7z x "$f" -o"$EXTRACT_DIR" -y
+              fi
+            done
+          fi
+          
+          # Find other standard archives (.zip, .rar, .7z) that are not part of split files
+          # Exclude .001, .002... and part2, part3...
+          STANDARD_ARCHIVES=$(find . -type f \( -name "*.zip" -o -name "*.rar" -o -name "*.7z" \) | sort)
+          if [ -n "$STANDARD_ARCHIVES" ]; then
+            for f in $STANDARD_ARCHIVES; do
+              # Skip if this is a part of split rar (handled by *part0*1.rar)
+              if [[ "$f" =~ [pP]art[0-9]+ ]]; then
+                echo "Skipping split part: $f (will be handled by part1)"
+                continue
+              fi
+              echo "Extracting standard archive: $f"
+              if [ -n "$PASSWORD" ]; then
+                7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
+              else
+                7z x "$f" -o"$EXTRACT_DIR" -y
+              fi
+            done
+          fi
+          
+          echo "=== Extraction completed ==="
+          ls -la "$EXTRACT_DIR"
+          
+          # 4. Upload extracted files back to Google Drive
+          echo "=== Uploading extracted content to Google Drive ==="
+          echo "Destination: $DEST_PATH"
+          rclone copy "$EXTRACT_DIR/" "$DEST_PATH/" --transfers 8 -P --stats-one-line
+          
+          echo "=== Done ==="

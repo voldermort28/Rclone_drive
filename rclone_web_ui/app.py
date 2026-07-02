@@ -1551,5 +1551,215 @@ def _mega_stop_checker():
 # Removed obsolete individual Mega routes
 
 
+# ==================== CLOUD UNPACK MODULE ====================
+import base64
+import requests
+
+GITHUB_CONFIG_FILE = os.path.join(BASE_DIR, 'github_config.json')
+
+active_unpack_job = {
+    'run_id': None,
+    'remote_path': None,
+    'started_at': 0
+}
+
+def _load_github_config():
+    config = {'github_pat': '', 'github_repo': ''}
+    if os.path.exists(GITHUB_CONFIG_FILE):
+        try:
+            with open(GITHUB_CONFIG_FILE, 'r') as f:
+                saved = json.load(f)
+                config['github_pat'] = saved.get('github_pat', '')
+                config['github_repo'] = saved.get('github_repo', '')
+        except Exception:
+            pass
+    return config
+
+def _save_github_config(data):
+    current = _load_github_config()
+    pat = (data.get('github_pat') or '').strip()
+    repo = (data.get('github_repo') or '').strip()
+    
+    if pat and pat != '__KEEP__':
+        current['github_pat'] = pat
+    if repo:
+        current['github_repo'] = repo
+        
+    with open(GITHUB_CONFIG_FILE, 'w') as f:
+        json.dump(current, f)
+    return current
+
+@app.route('/api/github/config', methods=['GET', 'POST'])
+def github_config():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            config = _save_github_config(data)
+            complete = bool(config.get('github_pat') and config.get('github_repo'))
+            return jsonify({'success': True, 'complete': complete, 'message': 'Đã lưu cấu hình GitHub'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+            
+    config = _load_github_config()
+    pat = config.get('github_pat', '')
+    masked_pat = ''
+    if pat:
+        masked_pat = pat[:4] + '...' + pat[-4:] if len(pat) > 8 else '***'
+    return jsonify({
+        'github_repo': config.get('github_repo', ''),
+        'has_pat': bool(pat),
+        'pat_masked': masked_pat,
+        'complete': bool(pat and config.get('github_repo'))
+    })
+
+@app.route('/api/cloud-unpack/start', methods=['POST'])
+def cloud_unpack_start():
+    data = request.get_json(force=True, silent=True) or {}
+    remote_path = data.get('remote_path', '').strip()
+    mode = data.get('mode', 'auto').strip()
+    password = data.get('password', '').strip()
+    
+    if not remote_path:
+        return jsonify({'success': False, 'error': 'Đường dẫn nguồn không được để trống'})
+        
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+    
+    if not pat or not repo:
+        return jsonify({'success': False, 'error': 'Chưa cấu hình GitHub Personal Access Token hoặc Repository'})
+        
+    # Read and encode rclone.conf
+    conf_path = get_rclone_conf_path()
+    rclone_conf_b64 = ""
+    if os.path.exists(conf_path):
+        try:
+            with open(conf_path, 'rb') as f:
+                rclone_conf_b64 = base64.b64encode(f.read()).decode('utf-8')
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Lỗi đọc rclone.conf: {str(e)}'})
+            
+    # Trigger repository dispatch
+    url = f"https://api.github.com/repos/{repo}/dispatches"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    payload = {
+        "event_type": "cloud_unpack",
+        "client_payload": {
+            "remote_path": remote_path,
+            "mode": mode,
+            "password": password,
+            "rclone_conf": rclone_conf_b64
+        }
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+        if resp.status_code == 204:
+            active_unpack_job['run_id'] = None
+            active_unpack_job['remote_path'] = remote_path
+            active_unpack_job['started_at'] = time.time()
+            return jsonify({'success': True, 'message': 'Đã gửi yêu cầu giải nén tới GitHub Actions'})
+        else:
+            return jsonify({'success': False, 'error': f'GitHub API Error ({resp.status_code}): {resp.text}'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Lỗi kết nối GitHub: {str(e)}'})
+
+@app.route('/api/cloud-unpack/status', methods=['GET'])
+def cloud_unpack_status():
+    if not active_unpack_job['started_at']:
+        return jsonify({'status': 'idle'})
+        
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+    
+    if not pat or not repo:
+        return jsonify({'success': False, 'error': 'Chưa cấu hình GitHub'})
+        
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    
+    # 1. If run_id is not yet resolved, query the latest workflow runs
+    if not active_unpack_job['run_id']:
+        url = f"https://api.github.com/repos/{repo}/actions/runs"
+        params = {"event": "repository_dispatch", "per_page": 5}
+        try:
+            resp = requests.get(url, headers=headers, params=params)
+            if resp.status_code == 200:
+                runs = resp.json().get('workflow_runs', [])
+                for run in runs:
+                    # Convert GitHub ISO time to epoch
+                    from datetime import datetime
+                    created_dt = datetime.strptime(run['created_at'], "%Y-%m-%dT%H:%M:%SZ")
+                    created_epoch = created_dt.timestamp()
+                    
+                    # If this run was created around or after we started the trigger
+                    if created_epoch >= (active_unpack_job['started_at'] - 30):
+                        active_unpack_job['run_id'] = run['id']
+                        break
+            else:
+                return jsonify({'status': 'initializing', 'message': 'Đang kết nối tới GitHub máy chủ...'})
+        except Exception as e:
+            return jsonify({'status': 'initializing', 'message': f'Đang kết nối... ({str(e)})'})
+            
+    # If still not found, we wait
+    if not active_unpack_job['run_id']:
+        # If it has been more than 45 seconds and no run is found, timeout
+        if time.time() - active_unpack_job['started_at'] > 45:
+            active_unpack_job['started_at'] = 0
+            return jsonify({'status': 'idle', 'error': 'Không tìm thấy workflow khởi chạy trên GitHub. Vui lòng kiểm tra lại PAT hoặc Repo.'})
+        return jsonify({'status': 'initializing', 'message': 'Đang đợi GitHub khởi động máy ảo...'})
+        
+    # 2. Get Run status & steps
+    run_id = active_unpack_job['run_id']
+    run_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+    jobs_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+    
+    try:
+        run_resp = requests.get(run_url, headers=headers)
+        jobs_resp = requests.get(jobs_url, headers=headers)
+        
+        if run_resp.status_code == 200:
+            run_data = run_resp.json()
+            status = run_data.get('status') # queued, in_progress, completed
+            conclusion = run_data.get('conclusion') # success, failure, etc.
+            
+            steps_data = []
+            if jobs_resp.status_code == 200:
+                for job in jobs_resp.json().get('jobs', []):
+                    for step in job.get('steps', []):
+                        steps_data.append({
+                            'name': step['name'],
+                            'status': step['status'],
+                            'conclusion': step['conclusion']
+                        })
+                        
+            return jsonify({
+                'status': status,
+                'conclusion': conclusion,
+                'remote_path': active_unpack_job['remote_path'],
+                'steps': steps_data,
+                'html_url': run_data.get('html_url')
+            })
+        else:
+            return jsonify({'status': 'error', 'error': f'Lỗi API GitHub: {run_resp.text}'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+@app.route('/api/cloud-unpack/reset', methods=['POST'])
+def cloud_unpack_reset():
+    active_unpack_job['run_id'] = None
+    active_unpack_job['remote_path'] = None
+    active_unpack_job['started_at'] = 0
+    return jsonify({'success': True})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, threaded=True)

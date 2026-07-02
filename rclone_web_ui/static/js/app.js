@@ -65,6 +65,10 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
             loadConfig();
             loadSAInfo();
             loadFshareConfig();
+            loadGithubConfig();
+        } else if (tabName === 'unpack') {
+            loadGithubConfig();
+            checkUnpackStatus();
         } else if (tabName === 'history') {
             loadQueue();
             loadHistory();
@@ -3111,4 +3115,261 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Load cookie status on page load
     tbLoadCookie();
     tbRestoreStatus();
+})();
+
+// ==================== CLOUD UNPACK MODULE ====================
+(function () {
+    const githubRepo = document.getElementById('githubRepo');
+    const githubPat = document.getElementById('githubPat');
+    const saveGithubConfigBtn = document.getElementById('saveGithubConfigBtn');
+    const githubConfigStatus = document.getElementById('githubConfigStatus');
+
+    const unpackSource = document.getElementById('unpack_source');
+    const unpackMode = document.getElementById('unpack_mode');
+    const unpackPassword = document.getElementById('unpack_password');
+    const btnUnpackStart = document.getElementById('btnUnpackStart');
+    const btnUnpackReset = document.getElementById('btnUnpackReset');
+    const unpackStatusSection = document.getElementById('unpackStatusSection');
+    const unpackStatusText = document.getElementById('unpackStatusText');
+    const unpackSourceText = document.getElementById('unpackSourceText');
+    const unpackGithubLink = document.getElementById('unpackGithubLink');
+    const unpackTimeline = document.getElementById('unpackTimeline');
+    const githubWarning = document.getElementById('githubWarning');
+    const linkToConfig = document.getElementById('linkToConfig');
+
+    let unpackPollTimer = null;
+    let isConfigComplete = false;
+
+    // Load GitHub Config
+    window.loadGithubConfig = async function () {
+        try {
+            const r = await fetch('/api/github/config');
+            const data = await r.json();
+            if (githubRepo) githubRepo.value = data.github_repo || '';
+            if (githubPat) githubPat.value = ''; // Don't show PAT
+            if (githubPat && data.has_pat) {
+                githubPat.placeholder = 'Đã lưu: ' + data.pat_masked;
+            }
+            
+            isConfigComplete = data.complete;
+            if (githubWarning) {
+                githubWarning.style.display = data.complete ? 'none' : 'block';
+            }
+        } catch (e) {
+            console.error('Lỗi tải config GitHub:', e);
+        }
+    };
+
+    // Save GitHub Config
+    if (saveGithubConfigBtn) {
+        saveGithubConfigBtn.addEventListener('click', async () => {
+            const repo = githubRepo.value.trim();
+            const pat = githubPat.value.trim();
+
+            if (!repo) {
+                showConfigStatus('Vui lòng điền Repository', 'danger');
+                return;
+            }
+
+            saveGithubConfigBtn.disabled = true;
+            try {
+                const r = await fetch('/api/github/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        github_repo: repo,
+                        github_pat: pat || '__KEEP__'
+                    })
+                });
+                const data = await r.json();
+                if (data.success) {
+                    showConfigStatus('Cấu hình GitHub lưu thành công!', 'success');
+                    loadGithubConfig();
+                } else {
+                    showConfigStatus('Lỗi: ' + data.error, 'danger');
+                }
+            } catch (e) {
+                showConfigStatus('Lỗi kết nối: ' + e, 'danger');
+            } finally {
+                saveGithubConfigBtn.disabled = false;
+            }
+        });
+    }
+
+    function showConfigStatus(msg, type) {
+        if (!githubConfigStatus) return;
+        githubConfigStatus.textContent = msg;
+        githubConfigStatus.className = 'config-status ' + type;
+        setTimeout(() => { githubConfigStatus.className = 'config-status'; }, 4000);
+    }
+
+    // Link warning to Config tab
+    if (linkToConfig) {
+        linkToConfig.addEventListener('click', (e) => {
+            e.preventDefault();
+            // Unlock/show config tab if hidden
+            const tabBtnConfig = document.getElementById('tabBtnConfig');
+            if (tabBtnConfig) {
+                tabBtnConfig.style.display = 'inline-flex';
+                tabBtnConfig.click();
+            }
+        });
+    }
+
+    // Start Unpack
+    if (btnUnpackStart) {
+        btnUnpackStart.addEventListener('click', async () => {
+            if (!isConfigComplete) {
+                alert('Vui lòng cấu hình GitHub Actions trong tab Cấu hình trước khi chạy!');
+                return;
+            }
+
+            let source = unpackSource.value.trim();
+            if (!source) {
+                alert('Vui lòng nhập đường dẫn nguồn Google Drive!');
+                return;
+            }
+
+            // Convert to Rclone syntax if dynamic link is pasted
+            if (source.indexOf('drive.google.com') > -1) {
+                const converted = convertSingleUrl(source);
+                if (converted) {
+                    source = converted;
+                    unpackSource.value = source;
+                }
+            }
+
+            const mode = unpackMode.value;
+            const password = unpackPassword.value.trim();
+
+            btnUnpackStart.disabled = true;
+            btnUnpackStart.querySelector('.btn-text').textContent = 'Đang khởi chạy...';
+
+            try {
+                const r = await fetch('/api/cloud-unpack/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        remote_path: source,
+                        mode: mode,
+                        password: password
+                    })
+                });
+                const data = await r.json();
+                if (data.success) {
+                    alert(data.message);
+                    unpackPassword.value = '';
+                    checkUnpackStatus();
+                } else {
+                    alert('Lỗi: ' + data.error);
+                }
+            } catch (e) {
+                alert('Lỗi kết nối: ' + e);
+            } finally {
+                btnUnpackStart.disabled = false;
+                btnUnpackStart.querySelector('.btn-text').textContent = '🚀 Bắt đầu Giải Nén Cloud';
+            }
+        });
+    }
+
+    // Reset tracking
+    if (btnUnpackReset) {
+        btnUnpackReset.addEventListener('click', async () => {
+            if (confirm('Bạn muốn ngừng theo dõi tiến trình này? (Không ảnh hưởng đến tiến trình đang chạy trên GitHub)')) {
+                try {
+                    await fetch('/api/cloud-unpack/reset', { method: 'POST' });
+                    checkUnpackStatus();
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        });
+    }
+
+    // Check unpack status & steps
+    window.checkUnpackStatus = async function () {
+        if (unpackPollTimer) clearTimeout(unpackPollTimer);
+
+        try {
+            const r = await fetch('/api/cloud-unpack/status');
+            const data = await r.json();
+
+            if (!data.status || data.status === 'idle') {
+                if (unpackStatusSection) unpackStatusSection.style.display = 'none';
+                if (btnUnpackReset) btnUnpackReset.style.display = 'none';
+                return;
+            }
+
+            // Show status section
+            if (unpackStatusSection) unpackStatusSection.style.display = 'block';
+            if (btnUnpackReset) btnUnpackReset.style.display = 'inline-block';
+            if (unpackSourceText) unpackSourceText.textContent = data.remote_path || '...';
+
+            // GitHub link
+            if (unpackGithubLink && data.html_url) {
+                unpackGithubLink.href = data.html_url;
+                unpackGithubLink.style.display = 'flex';
+            } else if (unpackGithubLink) {
+                unpackGithubLink.style.display = 'none';
+            }
+
+            // Status label & animation classes
+            let statusLabel = 'Đang chạy...';
+            if (data.status === 'queued') statusLabel = '⏳ Đang chờ máy ảo (Queued)...';
+            else if (data.status === 'initializing') statusLabel = '⚡ Đang khởi động...';
+            else if (data.status === 'in_progress') statusLabel = '🌀 Đang thực hiện (In Progress)...';
+            else if (data.status === 'completed') {
+                if (data.conclusion === 'success') statusLabel = '✅ Hoàn thành thành công (Success)!';
+                else statusLabel = '❌ Thất bại (Failed hoặc Cancelled)!';
+            }
+
+            if (unpackStatusText) unpackStatusText.textContent = statusLabel;
+
+            // Generate timeline steps
+            if (unpackTimeline) {
+                if (data.steps && data.steps.length > 0) {
+                    unpackTimeline.innerHTML = '';
+                    data.steps.forEach(step => {
+                        const stepDiv = document.createElement('div');
+                        stepDiv.className = 'timeline-step ' + (step.status || 'queued');
+                        if (step.status === 'completed' && step.conclusion === 'failure') {
+                            stepDiv.className = 'timeline-step failed';
+                        }
+                        
+                        const titleSpan = document.createElement('div');
+                        titleSpan.style.fontWeight = '500';
+                        titleSpan.textContent = step.name;
+                        stepDiv.appendChild(titleSpan);
+
+                        const descDiv = document.createElement('div');
+                        descDiv.className = 'step-details';
+                        let desc = 'Đang chờ...';
+                        if (step.status === 'in_progress') desc = '⚡ Đang xử lý...';
+                        else if (step.status === 'completed') {
+                            desc = step.conclusion === 'success' ? '✅ Đã hoàn thành' : '❌ Lỗi xảy ra';
+                        }
+                        descDiv.textContent = desc;
+                        stepDiv.appendChild(descDiv);
+
+                        unpackTimeline.appendChild(stepDiv);
+                    });
+                } else {
+                    unpackTimeline.innerHTML = '<div style="color:var(--text-muted); font-size:0.9rem;">⏳ Đang khởi tạo các bước chạy...</div>';
+                }
+            }
+
+            // Auto poll if still active
+            if (data.status !== 'completed') {
+                unpackPollTimer = setTimeout(checkUnpackStatus, 4000);
+            }
+        } catch (e) {
+            console.error('Lỗi check unpack status:', e);
+            unpackPollTimer = setTimeout(checkUnpackStatus, 6000);
+        }
+    };
+
+    // Auto-check on page load
+    setTimeout(() => {
+        checkUnpackStatus();
+    }, 1000);
 })();

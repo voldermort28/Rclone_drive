@@ -53,6 +53,13 @@
                 Cấu hình
             </button>
 
+            <button class="tab-btn" data-tab="unpack">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z" />
+                </svg>
+                Giải nén Cloud
+            </button>
+
             <button class="tab-btn" data-tab="history">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
@@ -348,6 +355,101 @@
                     </div>
                 </div>
                 <div id="teraboxCookieStatus" class="config-status"></div>
+            </section>
+
+            <!-- GitHub Actions Config Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;" id="githubConfigSection">
+                <div class="config-header">
+                    <h3>🐙 Cấu hình GitHub Actions (Cloud Unpack)</h3>
+                    <p class="config-desc">Cấu hình GitHub Personal Access Token (PAT) và Repository để chạy máy ảo tự động giải nén.</p>
+                </div>
+                <div class="input-group">
+                    <label for="githubRepo">GitHub Repository (Dạng: owner/repo)</label>
+                    <input type="text" id="githubRepo" placeholder="Ví dụ: myusername/gdrivedl" autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label for="githubPat">GitHub Personal Access Token (PAT)</label>
+                    <input type="password" id="githubPat" placeholder="Để trống nếu muốn giữ PAT đã lưu" autocomplete="new-password">
+                </div>
+                <div class="config-actions">
+                    <button id="saveGithubConfigBtn" class="btn-primary">
+                        <span class="btn-text">💾 Lưu cấu hình GitHub</span>
+                    </button>
+                </div>
+                <div id="githubConfigStatus" class="config-status"></div>
+            </section>
+        </div>
+
+        <!-- ========== TAB: UNPACK & MERGE ========== -->
+        <div class="tab-content" id="tab-unpack">
+            <section class="card input-section">
+                <div class="config-header" style="margin-bottom: 20px;">
+                    <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="vertical-align: text-bottom; margin-right: 5px;">
+                            <path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z" />
+                        </svg> Giải nén & Ghép file trên Cloud</h3>
+                    <p class="config-desc">Hệ thống sẽ chạy một máy ảo độc lập trên GitHub Actions để tải, giải nén/ghép nối các file .zip, .rar, .001 rồi tải trực tiếp lên Google Drive của bạn.</p>
+                </div>
+
+                <!-- GitHub settings warning if not configured -->
+                <div id="githubWarning" class="sa-info" style="display: none; padding: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; margin-bottom: 15px; font-size: 0.85rem; color: #f87171;">
+                    ⚠️ Chưa cấu hình GitHub Actions Personal Access Token hoặc Repository. Nhấp <a href="#" id="linkToConfig" style="color: #38bdf8; text-decoration: underline;">vào đây</a> để cấu hình trước.
+                </div>
+
+                <div class="input-group">
+                    <label for="unpack_source">Đường dẫn file hoặc thư mục trên Google Drive</label>
+                    <input type="text" id="unpack_source" placeholder="gc:{folder_id}/file.zip hoặc gc:{folder_id}/folder_split/">
+                    <div style="margin-top: 8px; display: flex; gap: 8px;">
+                        <button class="btn-secondary btn-browse-drive" data-target="unpack_source"
+                            style="padding: 4px 12px; font-size: 0.8rem;">📂 Duyệt Drive</button>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="unpack_mode">Chế độ xử lý</label>
+                    <select id="unpack_mode" class="form-select" style="width: 100%; padding: 8px 12px; border-radius: 6px; background: var(--input-bg, #0f172a); border: 1px solid var(--border-color); color: var(--text-color);">
+                        <option value="auto">Tự động phát hiện (Auto Detect)</option>
+                        <option value="extract">Chỉ giải nén (Extract only)</option>
+                        <option value="merge">Chỉ ghép file (Merge only)</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="unpack_password">Mật khẩu giải nén (nếu có)</label>
+                    <input type="password" id="unpack_password" placeholder="Mật khẩu của file zip/rar..." autocomplete="new-password">
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button id="btnUnpackStart" class="btn-primary" style="flex: 2; background-color: #ec4899;">
+                        <span class="btn-text">🚀 Bắt đầu Giải Nén Cloud</span>
+                    </button>
+                    <button id="btnUnpackReset" class="btn-secondary" style="flex: 1; display: none; border-color: #ef4444; color: #ef4444;">
+                        <span class="btn-text">Dừng/Hủy theo dõi</span>
+                    </button>
+                </div>
+            </section>
+
+            <section class="card status-section" id="unpackStatusSection" style="display: none;">
+                <div class="status-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                    <div>
+                        <h3 id="unpackStatusText">Đang chạy...</h3>
+                        <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 5px; word-break: break-all;">
+                            Nguồn: <strong id="unpackSourceText" style="color: var(--text-color);">...</strong>
+                        </div>
+                    </div>
+                    <a id="unpackGithubLink" href="#" target="_blank" class="btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                            <polyline points="15 3 21 3 21 9" />
+                            <line x1="10" y1="14" x2="21" y2="3" />
+                        </svg> Xem GitHub Actions
+                    </a>
+                </div>
+
+                <!-- Timeline flow -->
+                <div class="unpack-timeline" id="unpackTimeline" style="margin-top: 25px; display: flex; flex-direction: column; gap: 15px;">
+                    <!-- Steps will be dynamically generated here -->
+                </div>
             </section>
         </div>
 
