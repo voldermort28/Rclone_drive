@@ -849,9 +849,56 @@ function updateBreadcrumb() {
             .catch(function (e) { alert('Lỗi: ' + e.message); });
     }
 
+    function fsQueue() {
+        var url = fsUrlInput.value.trim();
+        var dest = fsDestInput.value.trim();
+        var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
+
+        if (!url) { alert('Vui lòng nhập link Fshare!'); return; }
+        if (!fsValidUrl(url)) { alert('Có dòng không phải link Fshare file hợp lệ.'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        var queueBtn = document.getElementById('fshareQueueBtn');
+        if (queueBtn) {
+            queueBtn.disabled = true;
+            queueBtn.textContent = '⏳ Đang thêm...';
+        }
+
+        fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, output_dir: dest, file_password: filePassword })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.message) {
+                    alert(data.message);
+                    fsUrlInput.value = '';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể thêm vào hàng đợi'));
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+            })
+            .finally(function () {
+                if (queueBtn) {
+                    queueBtn.disabled = false;
+                    queueBtn.textContent = '⏳ Thêm hàng đợi';
+                }
+            });
+    }
+
     fsCheckBtn.addEventListener('click', fsCheckInfo);
     fsStartBtn.addEventListener('click', fsStart);
     fsStopBtn.addEventListener('click', fsStop);
+    var fsQueueBtn = document.getElementById('fshareQueueBtn');
+    if (fsQueueBtn) fsQueueBtn.addEventListener('click', fsQueue);
     if (fsResetBtn) fsResetBtn.addEventListener('click', function () { fsReset(false); });
     if (fsClearTempBtn) fsClearTempBtn.addEventListener('click', function () { fsReset(true); });
 
@@ -1187,9 +1234,55 @@ function updateBreadcrumb() {
             .catch(function (e) { alert('Lỗi: ' + e.message); });
     }
 
+    function mfQueue() {
+        var url = mfUrlInput.value.trim();
+        var dest = mfDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link MediaFire!'); return; }
+        if (!mfValidUrl(url)) { alert('Danh sách không có link MediaFire folder/file hợp lệ.'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        var queueBtn = document.getElementById('mediafireQueueBtn');
+        if (queueBtn) {
+            queueBtn.disabled = true;
+            queueBtn.textContent = '⏳ Đang thêm...';
+        }
+
+        fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, output_dir: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.message) {
+                    alert(data.message);
+                    mfUrlInput.value = '';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể thêm vào hàng đợi'));
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+            })
+            .finally(function () {
+                if (queueBtn) {
+                    queueBtn.disabled = false;
+                    queueBtn.textContent = '⏳ Thêm hàng đợi';
+                }
+            });
+    }
+
     mfCheckBtn.addEventListener('click', mfCheckInfo);
     mfStartBtn.addEventListener('click', mfStart);
     mfStopBtn.addEventListener('click', mfStop);
+    var mfQueueBtn = document.getElementById('mediafireQueueBtn');
+    if (mfQueueBtn) mfQueueBtn.addEventListener('click', mfQueue);
     if (mfResetBtn) mfResetBtn.addEventListener('click', function () { mfReset(false); });
     if (mfClearTempBtn) mfClearTempBtn.addEventListener('click', function () { mfReset(true); });
 
@@ -1503,9 +1596,55 @@ function updateBreadcrumb() {
             .catch(function (e) { alert('Lỗi: ' + e.message); });
     }
 
+    function megaQueue() {
+        var url = megaUrlInput.value.trim();
+        var dest = megaDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link Mega.nz!'); return; }
+        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!'); return; }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        var queueBtn = document.getElementById('megaQueueBtn');
+        if (queueBtn) {
+            queueBtn.disabled = true;
+            queueBtn.textContent = '⏳ Đang thêm...';
+        }
+
+        fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, output_dir: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.message) {
+                    alert(data.message);
+                    megaUrlInput.value = '';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể thêm vào hàng đợi'));
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+            })
+            .finally(function () {
+                if (queueBtn) {
+                    queueBtn.disabled = false;
+                    queueBtn.textContent = '⏳ Thêm hàng đợi';
+                }
+            });
+    }
+
     megaCheckBtn.addEventListener('click', megaCheckInfo);
     megaStartBtn.addEventListener('click', megaStart);
     megaStopBtn.addEventListener('click', megaStop);
+    var megaQueueBtn = document.getElementById('megaQueueBtn');
+    if (megaQueueBtn) megaQueueBtn.addEventListener('click', megaQueue);
     if (megaResetBtn) megaResetBtn.addEventListener('click', function () { megaReset(false); });
     if (megaClearTempBtn) megaClearTempBtn.addEventListener('click', function () { megaReset(true); });
 
@@ -1724,9 +1863,23 @@ function renderQueue(records) {
 
         var urls = (rec.urls || '').substring(0, 100) + ((rec.urls || '').length > 100 ? '...' : '');
 
+        var jobType = rec.type || 'rclone';
+        var typeBadge = '';
+        if (jobType === 'fshare') {
+            typeBadge = '<span class="status-badge" style="background-color: #3b82f6; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Fshare</span>';
+        } else if (jobType === 'mediafire') {
+            typeBadge = '<span class="status-badge" style="background-color: #f97316; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">MediaFire</span>';
+        } else if (jobType === 'terabox') {
+            typeBadge = '<span class="status-badge" style="background-color: #10b981; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Terabox</span>';
+        } else if (jobType === 'mega') {
+            typeBadge = '<span class="status-badge" style="background-color: #ef4444; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Mega</span>';
+        } else {
+            typeBadge = '<span class="status-badge" style="background-color: #6366f1; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">GDrive</span>';
+        }
+
         row.innerHTML =
             '<td><strong style="color: #60a5fa;">' + execTimeStr + '</strong></td>' +
-            '<td style="word-break: break-all; max-width: 300px;">' + urls + '</td>' +
+            '<td style="word-break: break-all; max-width: 300px;">' + typeBadge + urls + '</td>' +
             '<td style="word-break: break-all;">' + (rec.dest || 'N/A') + '</td>' +
             '<td>' + statusHtml + '</td>' +
             '<td><button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 12px; border-color: #ef4444; color: #ef4444;" onclick="event.stopPropagation(); removeQueue(\'' + rec.id + '\')">Hủy</button></td>';
@@ -2741,11 +2894,65 @@ window.addEventListener('DOMContentLoaded', async () => {
             });
     }
 
+    function tbQueue() {
+        var url = tbUrlInput.value.trim();
+        var dest = tbDestInput.value.trim();
+
+        if (!url) { alert('Vui lòng nhập link Terabox!'); return; }
+        var lines = url.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        if (lines.length === 0) { alert('Vui lòng nhập link Terabox!'); return; }
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (!/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(line)) {
+                alert('Dòng ' + (i + 1) + ' không phải link Terabox hợp lệ!');
+                return;
+            }
+        }
+        if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
+
+        if (dest.indexOf('drive.google.com') > -1) {
+            var converted = convertSingleUrl(dest);
+            if (converted) dest = converted;
+        }
+
+        var queueBtn = document.getElementById('teraboxQueueBtn');
+        if (queueBtn) {
+            queueBtn.disabled = true;
+            queueBtn.textContent = '⏳ Đang thêm...';
+        }
+
+        fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, output_dir: dest })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.message) {
+                    alert(data.message);
+                    tbUrlInput.value = '';
+                } else {
+                    alert('Lỗi: ' + (data.error || 'Không thể thêm vào hàng đợi'));
+                }
+            })
+            .catch(function (e) {
+                alert('Lỗi kết nối: ' + e);
+            })
+            .finally(function () {
+                if (queueBtn) {
+                    queueBtn.disabled = false;
+                    queueBtn.textContent = '⏳ Thêm hàng đợi';
+                }
+            });
+    }
+
     // ---- Event Listeners ----
     tbSaveCookieBtn.addEventListener('click', tbSaveCookie);
     tbCheckBtn.addEventListener('click', tbCheckInfo);
     tbStartBtn.addEventListener('click', tbStart);
     tbStopBtn.addEventListener('click', tbStop);
+    var tbQueueBtn = document.getElementById('teraboxQueueBtn');
+    if (tbQueueBtn) tbQueueBtn.addEventListener('click', tbQueue);
     if (tbResetBtn) tbResetBtn.addEventListener('click', function () { tbReset(false); });
     if (tbClearTempBtn) tbClearTempBtn.addEventListener('click', function () { tbReset(true); });
 

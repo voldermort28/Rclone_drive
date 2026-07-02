@@ -60,8 +60,35 @@ download_state = {
     'files': [],
     'raw_urls': '',
     'output_dir': '',
-    'job_id': None
+    'job_id': None,
+    'job_type': None
 }
+
+def sync_tool_progress_to_queue(tool_name, percent, message):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+        download_state['progress'] = percent
+        download_state['message'] = message
+        if download_state['files']:
+            download_state['files'][0]['progress'] = percent
+            download_state['files'][0]['message'] = message
+            download_state['files'][0]['status'] = 'downloading'
+
+def sync_tool_state_update_to_queue(tool_name, values):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+        if download_state['files']:
+            if 'file_name' in values:
+                download_state['files'][0]['name'] = values['file_name']
+            if 'file_size_human' in values:
+                download_state['files'][0]['message'] = "Size: {0}".format(values['file_size_human'])
+
+def sync_tool_log_to_queue(tool_name, level, message):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+        download_state['logs'].append({
+            'level': logging.getLevelName(level),
+            'message': "[{0}] {1}".format(tool_name.upper(), message)
+        })
+        if len(download_state['logs']) > 300:
+            download_state['logs'] = download_state['logs'][-300:]
 
 current_job_thread = None
 stop_event = threading.Event()
@@ -91,6 +118,18 @@ def load_queue():
 def save_queue(q):
     with open(QUEUE_FILE, 'w') as f:
         json.dump(q, f)
+
+def detect_url_type(url):
+    url_lower = url.lower().strip()
+    if 'mediafire.com' in url_lower:
+        return 'mediafire'
+    if 'fshare.vn' in url_lower:
+        return 'fshare'
+    if 'mega.nz' in url_lower:
+        return 'mega'
+    if 'terabox.com' in url_lower or 'teraboxapp.com' in url_lower or '1024tera' in url_lower:
+        return 'terabox'
+    return 'rclone'
 
 # ==================== BACKGROUND WORKER ====================
 from rclone_engine import RcloneEngine
@@ -243,6 +282,298 @@ def run_real_rclone_job(job):
         download_state['message'] = str(e)
         return False
 
+def run_real_mediafire_job(job):
+    global download_state, _mediafire_engine
+    from mediafire_engine import MediaFireEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo MediaFire...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'mediafire'
+    })
+    
+    mediafire_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo MediaFire...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    _mediafire_engine = MediaFireEngine(_mediafire_progress, _mediafire_log, _mediafire_stop_checker, _mediafire_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        success = _mediafire_engine.run_full_pipeline(job['urls'], job['dest'])
+        if _mediafire_stop_checker():
+            mediafire_state['status'] = 'stopped'
+            mediafire_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng MediaFire job.'
+        elif success:
+            mediafire_state['status'] = 'done'
+            mediafire_state['phase'] = 'done'
+            mediafire_state['message'] = 'Hoàn tất! File từ MediaFire đã được copy lên Google Drive.'
+            mediafire_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            mediafire_state['status'] = 'error'
+            mediafire_state['phase'] = 'error'
+            if not mediafire_state['message']:
+                mediafire_state['message'] = 'Tải từ MediaFire thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = mediafire_state['message']
+    except Exception as e:
+        mediafire_state['status'] = 'error'
+        mediafire_state['phase'] = 'error'
+        mediafire_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+def run_real_fshare_job(job):
+    global download_state, _fshare_engine
+    from fshare_engine import FshareEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo Fshare...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'fshare'
+    })
+    
+    fshare_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Fshare...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    config = _load_fshare_config(include_secret=True)
+    _fshare_engine = FshareEngine(_fshare_progress, _fshare_log, _fshare_stop_checker, _fshare_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        success = _fshare_engine.run_full_pipeline(job['urls'], config, job['dest'], job.get('file_password', ''))
+        if _fshare_stop_checker():
+            fshare_state['status'] = 'stopped'
+            fshare_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng Fshare job.'
+        elif success:
+            fshare_state['status'] = 'done'
+            fshare_state['phase'] = 'done'
+            fshare_state['message'] = 'Hoàn tất! File Fshare đã được copy lên Google Drive.'
+            fshare_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            fshare_state['status'] = 'error'
+            fshare_state['phase'] = 'error'
+            if not fshare_state['message']:
+                fshare_state['message'] = 'Tải Fshare thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = fshare_state['message']
+    except Exception as e:
+        fshare_state['status'] = 'error'
+        fshare_state['phase'] = 'error'
+        fshare_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+def run_real_terabox_job(job):
+    global download_state, _terabox_engine
+    from terabox_engine import TeraboxEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo Terabox...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'terabox'
+    })
+    
+    terabox_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Terabox...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    TERABOX_COOKIE_FILE = os.path.join(BASE_DIR, 'terabox_cookie.txt')
+    if not os.path.exists(TERABOX_COOKIE_FILE):
+        error_msg = 'Chưa cấu hình cookie Terabox.'
+        terabox_state['status'] = 'error'
+        terabox_state['message'] = error_msg
+        download_state['status'] = 'error'
+        download_state['message'] = error_msg
+        download_state['job_type'] = None
+        return False
+        
+    with open(TERABOX_COOKIE_FILE, 'r') as f:
+        cookie = f.read().strip()
+        
+    if not cookie:
+        error_msg = 'Cookie Terabox trống.'
+        terabox_state['status'] = 'error'
+        terabox_state['message'] = error_msg
+        download_state['status'] = 'error'
+        download_state['message'] = error_msg
+        download_state['job_type'] = None
+        return False
+        
+    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        success = _terabox_engine.run_full_pipeline(job['urls'], cookie, job['dest'])
+        if _terabox_stop_checker():
+            terabox_state['status'] = 'stopped'
+            terabox_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng Terabox job.'
+        elif success:
+            terabox_state['status'] = 'done'
+            terabox_state['phase'] = 'done'
+            terabox_state['message'] = 'Hoàn tất! File Terabox đã được copy lên Google Drive.'
+            terabox_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            terabox_state['status'] = 'error'
+            terabox_state['phase'] = 'error'
+            if not terabox_state['message']:
+                terabox_state['message'] = 'Tải Terabox thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = terabox_state['message']
+    except Exception as e:
+        terabox_state['status'] = 'error'
+        terabox_state['phase'] = 'error'
+        terabox_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+def run_real_mega_job(job):
+    global download_state, _mega_engine
+    from mega_engine import MegaEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo Mega...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'mega'
+    })
+    
+    mega_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Mega...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    _mega_engine = MegaEngine(_mega_progress, _mega_log, _mega_stop_checker, _mega_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        success = _mega_engine.run_full_pipeline(job['urls'], job['dest'])
+        if _mega_stop_checker():
+            mega_state['status'] = 'stopped'
+            mega_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng Mega job.'
+        elif success:
+            mega_state['status'] = 'done'
+            mega_state['phase'] = 'done'
+            mega_state['message'] = 'Hoàn tất! File Mega đã được copy lên Google Drive.'
+            mega_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            mega_state['status'] = 'error'
+            mega_state['phase'] = 'error'
+            if not mega_state['message']:
+                mega_state['message'] = 'Tải Mega thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = mega_state['message']
+    except Exception as e:
+        mega_state['status'] = 'error'
+        mega_state['phase'] = 'error'
+        mega_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+
 def queue_worker_loop():
     global download_state
     while True:
@@ -262,7 +593,20 @@ def queue_worker_loop():
                 
         if job_to_run:
             status_prev = download_state['status']
-            quota_hit = run_real_rclone_job(job_to_run)
+            job_type = job_to_run.get('type', 'rclone')
+            
+            if job_type == 'rclone':
+                quota_hit = run_real_rclone_job(job_to_run)
+            elif job_type == 'mediafire':
+                quota_hit = run_real_mediafire_job(job_to_run)
+            elif job_type == 'fshare':
+                quota_hit = run_real_fshare_job(job_to_run)
+            elif job_type == 'terabox':
+                quota_hit = run_real_terabox_job(job_to_run)
+            elif job_type == 'mega':
+                quota_hit = run_real_mega_job(job_to_run)
+            else:
+                quota_hit = False
             
             q = load_queue()
             q = [j for j in q if j['id'] != job_to_run['id']]
@@ -305,9 +649,38 @@ worker_thread.start()
 
 @app.route('/api/stop', methods=['POST'])
 def stop_download():
-    global stop_event
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine
     if download_state['status'] in ['downloading', 'initializing']:
         stop_event.set()
+        
+        terabox_state['stop_flag'] = True
+        if _terabox_engine:
+            try:
+                _terabox_engine.stop()
+            except:
+                pass
+                
+        fshare_state['stop_flag'] = True
+        if _fshare_engine:
+            try:
+                _fshare_engine.stop()
+            except:
+                pass
+                
+        mediafire_state['stop_flag'] = True
+        if _mediafire_engine:
+            try:
+                _mediafire_engine.stop()
+            except:
+                pass
+                
+        mega_state['stop_flag'] = True
+        if _mega_engine:
+            try:
+                _mega_engine.stop()
+            except:
+                pass
+                
         return jsonify({'message': 'Stopping process...'})
     return jsonify({'message': 'No process running'})
 
@@ -335,6 +708,8 @@ def start_download():
         if m:
             dest_cleaned = m.group(1)
 
+    file_password = data.get('file_password', data.get('password', ''))
+
     q = load_queue()
     
     # Split by lines first, then process each line
@@ -356,12 +731,15 @@ def start_download():
         source_path = line
         original_url = None
         
-        # Normalize source
-        if 'drive.google.com' in line:
-            original_url = line
-            fid = extract_drive_id(line)
-            if fid:
-                source_path = f'gc:{fid}'
+        job_type = detect_url_type(line)
+        
+        if job_type == 'rclone':
+            # Normalize source
+            if 'drive.google.com' in line:
+                original_url = line
+                fid = extract_drive_id(line)
+                if fid:
+                    source_path = f'gc:{fid}'
         
         job = {
             'id': str(uuid.uuid4()),
@@ -369,10 +747,14 @@ def start_download():
             'original_url': original_url,
             'dest': dest_cleaned,
             'wrap': wrap,
+            'type': job_type,
             'status': 'waiting',
             'execute_at': time.time() - 1,
             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        if job_type == 'fshare' and file_password:
+            job['file_password'] = file_password
+            
         q.append(job)
         added_count += 1
     
@@ -786,12 +1168,14 @@ def _reset_terabox_state():
 def _terabox_progress(percent, message):
     terabox_state['progress'] = percent
     terabox_state['message'] = message
+    sync_tool_progress_to_queue('terabox', percent, message)
 
 
 def _terabox_state_update(values):
     for key, value in values.items():
         if key in terabox_state:
             terabox_state[key] = value
+    sync_tool_state_update_to_queue('terabox', values)
 
 
 def _terabox_log(level, message):
@@ -803,6 +1187,7 @@ def _terabox_log(level, message):
     if len(terabox_state['logs']) > 200:
         terabox_state['logs'] = terabox_state['logs'][-200:]
     logging.log(level, "[TERABOX] %s", message)
+    sync_tool_log_to_queue('terabox', level, message)
 
 
 def _terabox_stop_checker():
@@ -1094,12 +1479,14 @@ def _reset_fshare_state():
 def _fshare_progress(percent, message):
     fshare_state['progress'] = percent
     fshare_state['message'] = message
+    sync_tool_progress_to_queue('fshare', percent, message)
 
 
 def _fshare_state_update(values):
     for key, value in values.items():
         if key in fshare_state:
             fshare_state[key] = value
+    sync_tool_state_update_to_queue('fshare', values)
 
 
 def _fshare_log(level, message):
@@ -1111,6 +1498,7 @@ def _fshare_log(level, message):
     if len(fshare_state['logs']) > 200:
         fshare_state['logs'] = fshare_state['logs'][-200:]
     logging.log(level, "[FSHARE] %s", message)
+    sync_tool_log_to_queue('fshare', level, message)
 
 
 def _fshare_stop_checker():
@@ -1305,12 +1693,14 @@ def _reset_mediafire_state():
 def _mediafire_progress(percent, message):
     mediafire_state['progress'] = percent
     mediafire_state['message'] = message
+    sync_tool_progress_to_queue('mediafire', percent, message)
 
 
 def _mediafire_state_update(values):
     for key, value in values.items():
         if key in mediafire_state:
             mediafire_state[key] = value
+    sync_tool_state_update_to_queue('mediafire', values)
 
 
 def _mediafire_log(level, message):
@@ -1322,6 +1712,7 @@ def _mediafire_log(level, message):
     if len(mediafire_state['logs']) > 200:
         mediafire_state['logs'] = mediafire_state['logs'][-200:]
     logging.log(level, "[MEDIAFIRE] %s", message)
+    sync_tool_log_to_queue('mediafire', level, message)
 
 
 def _mediafire_stop_checker():
@@ -1500,12 +1891,14 @@ def _reset_mega_state():
 def _mega_progress(percent, message):
     mega_state['progress'] = percent
     mega_state['message'] = message
+    sync_tool_progress_to_queue('mega', percent, message)
 
 
 def _mega_state_update(values):
     for key, value in values.items():
         if key in mega_state:
             mega_state[key] = value
+    sync_tool_state_update_to_queue('mega', values)
 
 
 def _mega_log(level, message):
@@ -1517,6 +1910,7 @@ def _mega_log(level, message):
     if len(mega_state['logs']) > 200:
         mega_state['logs'] = mega_state['logs'][-200:]
     logging.log(level, "[MEGA] %s", message)
+    sync_tool_log_to_queue('mega', level, message)
 
 
 def _mega_stop_checker():
