@@ -73,7 +73,7 @@ jobs:
           PATH_PART="${PATH_PART%/}"
 
           # Detect Google Drive folder ID in the path and wrap with curly braces for gclone/rclone
-          if [[ "$PATH_PART" =~ ^([A-Za-z0-9\-_]{15,})(/.*)?$ ]]; then
+          if [[ "$PATH_PART" =~ ^([A-Za-z0-9_-]{15,})(/.*)?$ ]]; then
             FOLDER_ID="${BASH_REMATCH[1]}"
             SUBPATH="${BASH_REMATCH[2]}"
             if [[ ! "$FOLDER_ID" =~ ^\{.*\}$ ]]; then
