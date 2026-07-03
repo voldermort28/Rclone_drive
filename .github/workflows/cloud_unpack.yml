@@ -25,7 +25,7 @@ jobs:
           sudo curl https://rclone.org/install.sh | sudo bash
           echo "=== Installing 7-Zip & Unrar ==="
           sudo apt-get update
-          sudo apt-get install -p7zip-full unrar -y
+          sudo apt-get install p7zip-full unrar -y
 
       - name: Setup Rclone Configuration
         run: |
