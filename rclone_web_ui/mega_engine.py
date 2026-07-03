@@ -208,21 +208,47 @@ class MegaEngine:
 
     # ==================== MEGA FOLDER PARSING ====================
 
-    def parse_folder_url(self, url):
-        """Parse mega folder URL into (folder_id, folder_key_a32)."""
+    def parse_url(self, url):
+        """Parse mega URL into (type, id, key_a32).
+        type is 'folder' or 'file'.
+        """
         url = (url or '').strip()
-        # New format: mega.nz/folder/ID#KEY
+        
+        # New folder format: mega.nz/folder/ID#KEY
         m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
-            return folder_id, self._str_to_a32(key_bytes)
-        # Old format: mega.nz/#F!ID!KEY
+            return 'folder', folder_id, self._str_to_a32(key_bytes)
+            
+        # Old folder format: mega.nz/#F!ID!KEY
         m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#F!([^!]+)!(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
-            return folder_id, self._str_to_a32(key_bytes)
+            return 'folder', folder_id, self._str_to_a32(key_bytes)
+            
+        # New file format: mega.nz/file/ID#KEY
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/file/([^#]+)#(.+)', url, re.I)
+        if m:
+            file_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            return 'file', file_id, self._str_to_a32(key_bytes)
+            
+        # Old file format: mega.nz/#!ID!KEY
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#?!([^!]+)!(.+)', url, re.I)
+        if m:
+            file_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            return 'file', file_id, self._str_to_a32(key_bytes)
+            
+        return None, None, None
+
+    def parse_folder_url(self, url):
+        """Parse mega folder URL into (folder_id, folder_key_a32)."""
+        url_type, node_id, node_key = self.parse_url(url)
+        if url_type == 'folder':
+            return node_id, node_key
         return None, None
 
     def get_folder_info(self, url):
@@ -232,12 +258,53 @@ class MegaEngine:
         if AES is None:
             return {'error': "Module 'pycryptodome' not installed."}
 
-        folder_id, folder_key = self.parse_folder_url(url)
-        if not folder_id or not folder_key:
-            return {'error': 'Link Mega.nz không hợp lệ. Cần dạng https://mega.nz/folder/ID#KEY'}
+        url_type, node_id, node_key = self.parse_url(url)
+        if not url_type or not node_id or not node_key:
+            return {'error': 'Link Mega.nz không hợp lệ. Cần dạng https://mega.nz/folder/ID#KEY hoặc https://mega.nz/file/ID#KEY'}
 
+        if url_type == 'file':
+            # Handle single file info query
+            try:
+                data = self._api_request({'a': 'g', 'g': 1, 'p': node_id})
+            except Exception as e:
+                return {'error': 'Mega API lỗi: {0}'.format(str(e))}
+
+            if not isinstance(data, dict):
+                return {'error': 'Mega API trả về dữ liệu không hợp lệ.'}
+
+            try:
+                at_str = data.get('at', '')
+                size = data.get('s', 0)
+                attrs = self._decrypt_attr(at_str, node_key)
+                filename = attrs.get('n', 'file_{0}'.format(node_id))
+            except Exception as e:
+                filename = 'file_{0}'.format(node_id)
+                size = data.get('s', 0)
+
+            safe_filename = self._safe_name(filename)
+            files = [{
+                'handle': node_id,
+                'name': safe_filename,
+                'size': size,
+                'size_human': self._human_size(size) if size else '',
+                'rel_dir': '',
+                'key_a32': node_key,
+                'is_file_only': True,
+            }]
+            return {
+                'success': True,
+                'folder_name': safe_filename,
+                'folder_id': node_id,
+                'folder_key': node_key,
+                'file_count': 1,
+                'total_size': size,
+                'total_size_human': self._human_size(size),
+                'files': files,
+            }
+
+        # Handle folder info query
         try:
-            data = self._api_request({'a': 'f', 'c': 1, 'ca': 1, 'r': 1}, folder_id)
+            data = self._api_request({'a': 'f', 'c': 1, 'ca': 1, 'r': 1}, node_id)
         except Exception as e:
             return {'error': 'Mega API lỗi: {0}'.format(str(e))}
 
@@ -268,7 +335,7 @@ class MegaEngine:
                 continue
 
             name = ''
-            node_key = []
+            node_key_dec = []
             try:
                 enc_key_b64 = ''
                 if k_str:
@@ -285,8 +352,8 @@ class MegaEngine:
 
                 enc_key_bytes = self._b64_url_decode(enc_key_b64)
                 enc_key_a32 = self._str_to_a32(enc_key_bytes)
-                node_key = self._decrypt_key(enc_key_a32, folder_key)
-                attrs = self._decrypt_attr(a_str, node_key)
+                node_key_dec = self._decrypt_key(enc_key_a32, node_key)
+                attrs = self._decrypt_attr(a_str, node_key_dec)
                 name = attrs.get('n', '')
             except Exception:
                 name = 'file_{0}'.format(h)
@@ -298,7 +365,7 @@ class MegaEngine:
                 'name': self._safe_name(name) if name else 'file_{0}'.format(h),
                 'size': s,
                 'size_human': self._human_size(s) if s else '',
-                'key_a32': node_key,
+                'key_a32': node_key_dec,
             })
 
         # Build tree paths
@@ -350,8 +417,8 @@ class MegaEngine:
         return {
             'success': True,
             'folder_name': root_name,
-            'folder_id': folder_id,
-            'folder_key': folder_key,
+            'folder_id': node_id,
+            'folder_key': node_key,
             'file_count': len(files),
             'total_size': total_size,
             'total_size_human': self._human_size(total_size),
@@ -360,9 +427,12 @@ class MegaEngine:
 
     # ==================== DOWNLOAD ====================
 
-    def _get_download_url(self, node_handle, folder_id):
+    def _get_download_url(self, node_handle, folder_id, is_file_only=False):
         """Get temporary download URL for a file node."""
-        data = self._api_request({'a': 'g', 'g': 1, 'n': node_handle}, folder_id)
+        if is_file_only:
+            data = self._api_request({'a': 'g', 'g': 1, 'p': node_handle})
+        else:
+            data = self._api_request({'a': 'g', 'g': 1, 'n': node_handle}, folder_id)
         if isinstance(data, dict) and 'g' in data:
             return data['g']
         if isinstance(data, int) and data == -18:
@@ -586,7 +656,7 @@ class MegaEngine:
                 self._emit_state(status='downloading', phase='download')
 
                 try:
-                    dl_url = self._get_download_url(fobj['handle'], folder_id)
+                    dl_url = self._get_download_url(fobj['handle'], folder_id, is_file_only=fobj.get('is_file_only', False))
                 except Exception as e:
                     self.log_callback(logging.ERROR, str(e))
                     return False

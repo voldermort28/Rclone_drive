@@ -1472,7 +1472,7 @@ if (tbSaveCookieBtn) {
     if (savedMegaDest) megaDestInput.value = savedMegaDest;
 
     function megaValidUrl(url) {
-        return /mega\.(?:nz|co\.nz|io)\/(?:folder\/|#F!)/i.test(url);
+        return /mega\.(?:nz|co\.nz|io)\/(?:folder\/|file\/|#F!|#\??!)/i.test(url);
     }
 
     function megaCheckInfo() {
@@ -1482,7 +1482,7 @@ if (tbSaveCookieBtn) {
             return;
         }
         if (!megaValidUrl(url)) {
-            alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!');
+            alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/..., /file/..., /#F! hoặc /#!');
             return;
         }
 
@@ -1521,7 +1521,7 @@ if (tbSaveCookieBtn) {
         var dest = megaDestInput.value.trim();
 
         if (!url) { alert('Vui lòng nhập link Mega.nz!'); return; }
-        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!'); return; }
+        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/..., /file/..., /#F! hoặc /#!'); return; }
         if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
 
         localStorage.setItem('mega_link', url);
@@ -1752,7 +1752,7 @@ if (tbSaveCookieBtn) {
         var dest = megaDestInput.value.trim();
 
         if (!url) { alert('Vui lòng nhập link Mega.nz!'); return; }
-        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/... hoặc /#F!'); return; }
+        if (!megaValidUrl(url)) { alert('Link Mega.nz không hợp lệ. Phải có dạng /folder/..., /file/..., /#F! hoặc /#!'); return; }
         if (!dest) { alert('Vui lòng nhập đường dẫn đích Google Drive!'); return; }
 
         if (dest.indexOf('drive.google.com') > -1) {
