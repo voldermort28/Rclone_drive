@@ -58,25 +58,72 @@ jobs:
           mkdir -p "$DOWNLOAD_DIR" "$WORK_DIR" "$EXTRACT_DIR"
           
           # 1. Determine destination path and handle single file vs folder
-          # Strip trailing slash if present for parsing
-          CLEANED_PATH="${REMOTE_PATH%/}"
-          
-          # Get parent path and basename
-          PARENT_PATH=$(dirname "$CLEANED_PATH")
-          BASENAME=$(basename "$CLEANED_PATH")
-          
+          # Parse remote and path part
+          if [[ "$REMOTE_PATH" =~ ^([^:]+):(.*)$ ]]; then
+            REMOTE_NAME="${BASH_REMATCH[1]}"
+            PATH_PART="${BASH_REMATCH[2]}"
+            HAS_REMOTE=true
+          else
+            REMOTE_NAME=""
+            PATH_PART="$REMOTE_PATH"
+            HAS_REMOTE=false
+          fi
+
+          # Strip trailing slash from PATH_PART if present
+          PATH_PART="${PATH_PART%/}"
+
+          # Detect Google Drive folder ID in the path and wrap with curly braces for gclone/rclone
+          if [[ "$PATH_PART" =~ ^([A-Za-z0-9\-_]{15,})(/.*)?$ ]]; then
+            FOLDER_ID="${BASH_REMATCH[1]}"
+            SUBPATH="${BASH_REMATCH[2]}"
+            if [[ ! "$FOLDER_ID" =~ ^\{.*\}$ ]]; then
+              PATH_PART="{${FOLDER_ID}}${SUBPATH}"
+            fi
+          fi
+
+          # Reconstruct normalized REMOTE_PATH
+          if [ "$HAS_REMOTE" = "true" ]; then
+            CLEANED_PATH="${REMOTE_NAME}:${PATH_PART}"
+          else
+            CLEANED_PATH="${PATH_PART}"
+          fi
+
+          # Extract parent path and basename
+          if [ -z "$PATH_PART" ]; then
+            PARENT_PATH="$CLEANED_PATH"
+            BASENAME=""
+          else
+            DIR_PART=$(dirname "$PATH_PART")
+            BASE_PART=$(basename "$PATH_PART")
+            if [ "$DIR_PART" = "." ]; then
+              if [ "$HAS_REMOTE" = "true" ]; then
+                PARENT_PATH="${REMOTE_NAME}:"
+              else
+                PARENT_PATH="."
+              fi
+            else
+              if [ "$HAS_REMOTE" = "true" ]; then
+                PARENT_PATH="${REMOTE_NAME}:${DIR_PART}"
+              else
+                PARENT_PATH="${DIR_PART}"
+              fi
+            fi
+            BASENAME="$BASE_PART"
+          fi
+
+          echo "Cleaned Path: $CLEANED_PATH"
           echo "Parent Path: $PARENT_PATH"
           echo "Basename: $BASENAME"
-          
-          # Check if targeted path is a folder by using rclone lsf with --max-depth 1
+
+          # Check if targeted path is a folder by using rclone lsjson
           # If it returns multiple entries or if REMOTE_PATH ends with a slash, we treat it as folder
           IS_FOLDER=false
-          if [[ "$REMOTE_PATH" == */ ]] || ! rclone lsjson "$REMOTE_PATH" --max-depth 0 | grep -q '"IsDir":false'; then
+          if [[ "$REMOTE_PATH" == */ ]] || ! rclone lsjson "$CLEANED_PATH" --max-depth 0 | grep -q '"IsDir":false'; then
             IS_FOLDER=true
           fi
-          
+
           echo "Is Folder: $IS_FOLDER"
-          
+
           # 2. Download files to download dir
           if [ "$IS_FOLDER" = "true" ]; then
             # If folder, copy matching archives
@@ -88,7 +135,7 @@ jobs:
           else
             # If file, copy the specific file or all parts of the split file
             echo "=== Checking file type for split files ==="
-            
+
             # Detect zip.001, rar.001, etc.
             if [[ "$BASENAME" =~ \.(zip|rar|7z)\.[0-9]+$ ]]; then
               echo "Split file detected (.001 format)"
@@ -96,7 +143,7 @@ jobs:
               PREFIX="${BASENAME%.*}"
               echo "Downloading all parts for: $PREFIX"
               rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.*" --transfers 8 -P
-              
+
             # Detect .part1.rar or .part01.rar
             elif [[ "$BASENAME" =~ \.part0*[1]\.rar$ ]]; then
               echo "Split WinRAR detected (.part1.rar format)"
@@ -105,11 +152,11 @@ jobs:
               PREFIX=$(echo "$BASENAME" | sed -E 's/\.part0*[0-9]+\.rar//I')
               echo "Downloading all parts starting with: $PREFIX.part"
               rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.part*.rar" --include "$PREFIX.part*.RAR" --transfers 8 -P
-              
+
             # Standard single archive file
             else
               echo "Single archive file detected"
-              rclone copyto "$REMOTE_PATH" "$DOWNLOAD_DIR/$BASENAME" -P
+              rclone copyto "$CLEANED_PATH" "$DOWNLOAD_DIR/$BASENAME" -P
             fi
             DEST_PATH="$PARENT_PATH"
           fi
