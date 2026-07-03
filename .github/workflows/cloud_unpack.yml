@@ -21,8 +21,13 @@ jobs:
 
       - name: Install Rclone & Extraction Tools
         run: |
-          echo "=== Installing Rclone ==="
-          sudo curl https://rclone.org/install.sh | sudo bash
+          echo "=== Installing Gclone ==="
+          curl -L -o gclone.zip https://github.com/dogbutcat/gclone/releases/download/v1.71.0-mod1.6.2/gclone-v1.71.0-mod1.6.2-linux-amd64.zip
+          unzip gclone.zip
+          GCLONE_BIN=$(find . -name "gclone" -type f)
+          chmod +x "$GCLONE_BIN"
+          sudo mv "$GCLONE_BIN" /usr/bin/rclone
+          rm -rf gclone.zip gclone-v*
           echo "=== Installing 7-Zip & Unrar ==="
           sudo apt-get update
           sudo apt-get install p7zip-full unrar -y
