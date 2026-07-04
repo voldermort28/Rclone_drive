@@ -90,9 +90,10 @@ jobs:
             PATH_PART="${BASH_REMATCH[2]}"
             HAS_REMOTE=true
           else
-            REMOTE_NAME=""
+            # Default to 'gc' remote if no remote prefix is provided
+            REMOTE_NAME="gc"
             PATH_PART="$REMOTE_PATH"
-            HAS_REMOTE=false
+            HAS_REMOTE=true
           fi
 
           # Strip trailing slash from PATH_PART if present
