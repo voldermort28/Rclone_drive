@@ -143,7 +143,7 @@ jobs:
             # If folder, copy matching archives
             echo "=== Downloading folder contents ==="
             rclone copy "$CLEANED_PATH/" "$DOWNLOAD_DIR/" \
-              --include "*.{zip,rar,7z,tar,gz,zip.*,rar.*,7z.*,z0*,part*}" \
+              --include "*.{zip,rar,7z,tar,gz,zip.*,rar.*,7z.*,z0*,r[0-9]*,part*}" \
               --transfers 8 -P
             DEST_PATH="$CLEANED_PATH"
           else
@@ -166,6 +166,18 @@ jobs:
               PREFIX=$(echo "$BASENAME" | sed -E 's/\.part0*[0-9]+\.rar//I')
               echo "Downloading all parts starting with: $PREFIX.part"
               rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.part*.rar" --include "$PREFIX.part*.RAR" --transfers 8 -P
+
+            # Detect old split WinRAR (.rar, .r00, .r01 format)
+            elif [[ "$BASENAME" =~ \.rar$ || "$BASENAME" =~ \.r[0-9]+$ ]]; then
+              echo "Split old WinRAR detected (.r00 format)"
+              PREFIX=$(echo "$BASENAME" | sed -E 's/\.(rar|r[0-9]+)$//I')
+              echo "Downloading all parts starting with: $PREFIX"
+              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" \
+                --include "$PREFIX.rar" \
+                --include "$PREFIX.RAR" \
+                --include "$PREFIX.r[0-9]*" \
+                --include "$PREFIX.R[0-9]*" \
+                --transfers 8 -P
 
             # Standard single archive file
             else
