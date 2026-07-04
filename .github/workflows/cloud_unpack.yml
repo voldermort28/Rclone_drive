@@ -130,10 +130,9 @@ jobs:
           echo "Parent Path: $PARENT_PATH"
           echo "Basename: $BASENAME"
 
-          # Check if targeted path is a folder by using rclone lsjson
-          # If it returns multiple entries or if REMOTE_PATH ends with a slash, we treat it as folder
+          # Check if targeted path is a folder by using rclone lsd
           IS_FOLDER=false
-          if [[ "$REMOTE_PATH" == */ ]] || ! rclone lsjson "$CLEANED_PATH" --max-depth 0 | grep -q '"IsDir":false'; then
+          if [[ "$REMOTE_PATH" == */ ]] || rclone lsd "$CLEANED_PATH" >/dev/null 2>&1; then
             IS_FOLDER=true
           fi
 
@@ -199,8 +198,9 @@ jobs:
             done
           fi
           
-          # Find split WinRAR files (.part1.rar) to extract
-          PART_RAR_FILES=$(find . -iname "*part0*1.rar" | sort)
+          # Find split WinRAR files (.part1.rar) to extract (match part1.rar, part01.rar, etc. via regex)
+          PART_RAR_FILES=$(find . -regextype posix-extended -iregex '.*part0*1\.rar' | sort)
+
           if [ -n "$PART_RAR_FILES" ]; then
             for f in $PART_RAR_FILES; do
               echo "Extracting multipart RAR: $f"
