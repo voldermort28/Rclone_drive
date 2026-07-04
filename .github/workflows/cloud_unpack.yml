@@ -192,7 +192,7 @@ jobs:
               if [ -n "$PASSWORD" ]; then
                 7z x "$WORK_DIR/$BASE_ARCHIVE" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
               else
-                7z x "$WORK_DIR/$BASE_ARCHIVE" -o"$EXTRACT_DIR" -y
+                7z x "$WORK_DIR/$BASE_ARCHIVE" -p- -o"$EXTRACT_DIR" -y
               fi
               rm -f "$WORK_DIR/$BASE_ARCHIVE"
             done
@@ -207,7 +207,7 @@ jobs:
               if [ -n "$PASSWORD" ]; then
                 7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
               else
-                7z x "$f" -o"$EXTRACT_DIR" -y
+                7z x "$f" -p- -o"$EXTRACT_DIR" -y
               fi
             done
           fi
@@ -226,7 +226,7 @@ jobs:
               if [ -n "$PASSWORD" ]; then
                 7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
               else
-                7z x "$f" -o"$EXTRACT_DIR" -y
+                7z x "$f" -p- -o"$EXTRACT_DIR" -y
               fi
             done
           fi
