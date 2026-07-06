@@ -81,12 +81,16 @@
                         <span class="badge-indicator" id="badgeTeraboxIndicator"></span>
                         <span>Terabox Cookie: <strong id="badgeTeraboxText">Kiểm tra...</strong></span>
                     </div>
+                    <div class="badge-status-box">
+                        <span class="badge-indicator" id="badgeFichierIndicator"></span>
+                        <span>1fichier: <strong id="badgeFichierText">Kiểm tra...</strong></span>
+                    </div>
                 </div>
 
                 <div class="input-group">
-                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire...)</label>
+                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire, 1fichier...)</label>
                     <textarea id="url" rows="5"
-                        placeholder="Paste link nguồn ở đây (mỗi dòng 1 link)...&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY"
+                        placeholder="Paste link nguồn ở đây (mỗi dòng 1 link)...&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY&#10;VD 1fichier: https://1fichier.com/?abcdef123"
                         autocomplete="off"></textarea>
                     <div style="margin-top: 8px;">
                         <label
@@ -355,6 +359,26 @@
                     </div>
                 </div>
                 <div id="teraboxCookieStatus" class="config-status"></div>
+            </section>
+
+            <!-- 1fichier API Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;" id="fichierConfigSection">
+                <div class="config-header">
+                    <h3>⚡ API Key 1fichier</h3>
+                    <p class="config-desc">Cấu hình API Key 1fichier để tải tốc độ cao (Premium). Đối với tài khoản Free, hệ thống sẽ tự động bypass và tải tốc độ thông thường.</p>
+                </div>
+                <div class="input-group">
+                    <label for="fichierApiKey">API Key 1fichier</label>
+                    <input type="password" id="fichierApiKey" placeholder="Nhập API Key 1fichier ở đây..." autocomplete="new-password">
+                </div>
+                <div class="config-actions">
+                    <button id="loadFichierConfigBtn" class="btn-secondary">Tải lại 1fichier</button>
+                    <button id="clearFichierConfigBtn" class="btn-secondary" style="border-color: #ef4444; color: #ef4444;">❌ Xóa API Key</button>
+                    <button id="saveFichierConfigBtn" class="btn-primary">
+                        <span class="btn-text">💾 Lưu 1fichier</span>
+                    </button>
+                </div>
+                <div id="fichierConfigStatus" class="config-status"></div>
             </section>
 
             <!-- GitHub Actions Config Section -->

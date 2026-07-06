@@ -129,6 +129,8 @@ def detect_url_type(url):
         return 'mega'
     if 'terabox.com' in url_lower or 'teraboxapp.com' in url_lower or '1024tera' in url_lower:
         return 'terabox'
+    if any(dom in url_lower for dom in ['1fichier.com', '1fichier.fr', '1fichier.co', '1fichier.org', '1fichier.net']):
+        return '1fichier'
     return 'rclone'
 
 # ==================== BACKGROUND WORKER ====================
@@ -573,6 +575,74 @@ def run_real_mega_job(job):
     download_state['job_type'] = None
     return False
 
+def run_real_fichier_job(job):
+    global download_state, _fichier_engine
+    from fichier_engine import FichierEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo 1fichier...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': '1fichier'
+    })
+    
+    fichier_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo 1fichier...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    _fichier_engine = FichierEngine(_fichier_progress, _fichier_log, _fichier_stop_checker, _fichier_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        config = _load_fichier_config(include_secret=True)
+        success = _fichier_engine.run_full_pipeline(job['urls'], config, job['dest'])
+        if _fichier_stop_checker():
+            fichier_state['status'] = 'stopped'
+            fichier_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng 1fichier job.'
+        elif success:
+            fichier_state['status'] = 'done'
+            fichier_state['phase'] = 'done'
+            fichier_state['message'] = 'Hoàn tất! File từ 1fichier đã được copy lên Google Drive.'
+            fichier_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            fichier_state['status'] = 'error'
+            fichier_state['phase'] = 'error'
+            if not fichier_state['message']:
+                fichier_state['message'] = 'Tải từ 1fichier thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = fichier_state['message']
+    except Exception as e:
+        fichier_state['status'] = 'error'
+        fichier_state['phase'] = 'error'
+        fichier_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
 
 def queue_worker_loop():
     global download_state
@@ -605,6 +675,8 @@ def queue_worker_loop():
                 quota_hit = run_real_terabox_job(job_to_run)
             elif job_type == 'mega':
                 quota_hit = run_real_mega_job(job_to_run)
+            elif job_type == '1fichier':
+                quota_hit = run_real_fichier_job(job_to_run)
             else:
                 quota_hit = False
             
@@ -649,7 +721,7 @@ worker_thread.start()
 
 @app.route('/api/stop', methods=['POST'])
 def stop_download():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine
     if download_state['status'] in ['downloading', 'initializing']:
         stop_event.set()
         
@@ -681,12 +753,19 @@ def stop_download():
             except:
                 pass
                 
+        fichier_state['stop_flag'] = True
+        if _fichier_engine:
+            try:
+                _fichier_engine.stop()
+            except:
+                pass
+                
         return jsonify({'message': 'Stopping process...'})
     return jsonify({'message': 'No process running'})
 
 @app.route('/api/clear_temp', methods=['POST'])
 def clear_temp():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine
     # 1. Stop any currently running task
     stop_event.set()
     terabox_state['stop_flag'] = True
@@ -709,13 +788,19 @@ def clear_temp():
         try: _mega_engine.stop()
         except: pass
         
+    fichier_state['stop_flag'] = True
+    if _fichier_engine:
+        try: _fichier_engine.stop()
+        except: pass
+        
     # 2. Delete all temp folders
     deleted_paths = []
     for path, name in [
         (TERABOX_TMP_ROOT, 'Terabox'),
         (FSHARE_TMP_ROOT, 'Fshare'),
         (MEDIAFIRE_TMP_ROOT, 'MediaFire'),
-        (MEGA_TMP_ROOT, 'Mega')
+        (MEGA_TMP_ROOT, 'Mega'),
+        (FICHIER_TMP_ROOT, '1fichier')
     ]:
         if os.path.exists(path):
             try:
@@ -729,6 +814,7 @@ def clear_temp():
     _reset_fshare_state()
     _reset_mediafire_state()
     _reset_mega_state()
+    _reset_fichier_state()
     
     # 4. Clear queue
     try:
@@ -1549,6 +1635,120 @@ def _mega_stop_checker():
 
 
 # Removed obsolete individual Mega routes
+
+
+# ==================== FICHIER MODULE (Completely Isolated) ====================
+from fichier_engine import FichierEngine
+
+FICHIER_CONFIG_FILE = os.path.join(BASE_DIR, 'fichier_config.json')
+FICHIER_TMP_ROOT = '/tmp/fichier_dl'
+
+fichier_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
+}
+_fichier_engine = None
+
+
+def _reset_fichier_state():
+    fichier_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+
+def _fichier_progress(percent, message):
+    fichier_state['progress'] = percent
+    fichier_state['message'] = message
+    sync_tool_progress_to_queue('1fichier', percent, message)
+
+
+def _fichier_state_update(values):
+    for key, value in values.items():
+        if key in fichier_state:
+            fichier_state[key] = value
+    sync_tool_state_update_to_queue('1fichier', values)
+
+
+def _fichier_log(level, message):
+    fichier_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(fichier_state['logs']) > 200:
+        fichier_state['logs'] = fichier_state['logs'][-200:]
+    logging.log(level, "[1FICHIER] %s", message)
+    sync_tool_log_to_queue('1fichier', level, message)
+
+
+def _fichier_stop_checker():
+    return fichier_state.get('stop_flag', False)
+
+
+def _load_fichier_config(include_secret=True):
+    config = {
+        'api_key': os.environ.get('FICHIER_API_KEY', '')
+    }
+    if os.path.exists(FICHIER_CONFIG_FILE):
+        try:
+            with open(FICHIER_CONFIG_FILE, 'r') as f:
+                saved = json.load(f)
+            if saved.get('api_key'):
+                config['api_key'] = saved.get('api_key')
+        except Exception:
+            pass
+    if not include_secret:
+        return {
+            'has_api_key': bool(config.get('api_key')),
+            'api_key_masked': _mask_secret(config.get('api_key', '')),
+            'complete': bool(config.get('api_key'))
+        }
+    return config
+
+
+def _save_fichier_config(data):
+    current = _load_fichier_config(include_secret=True)
+    if 'api_key' in data:
+        val = (data.get('api_key') or '').strip()
+        if val == '__KEEP__':
+            pass
+        else:
+            current['api_key'] = val
+    with open(FICHIER_CONFIG_FILE, 'w') as f:
+        json.dump(current, f)
+    return current
+
+
+@app.route('/api/fichier/config', methods=['GET', 'POST'])
+def fichier_config():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            config = _save_fichier_config(data)
+            complete = bool(config.get('api_key'))
+            return jsonify({'success': True, 'complete': complete, 'message': 'Đã lưu cấu hình 1fichier'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify(_load_fichier_config(include_secret=False))
 
 
 # ==================== CLOUD UNPACK MODULE ====================

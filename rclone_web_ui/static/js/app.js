@@ -66,6 +66,7 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
             loadSAInfo();
             loadFshareConfig();
             loadGithubConfig();
+            loadFichierConfig();
         } else if (tabName === 'unpack') {
             loadGithubConfig();
             checkUnpackStatus();
@@ -581,6 +582,33 @@ function checkConfigStatus() {
             const text = document.getElementById('badgeTeraboxText');
             if (indicator && text) {
                 indicator.className = 'badge-indicator inactive';
+                text.textContent = 'Lỗi kết nối';
+            }
+        });
+
+    fetch('/api/fichier/config')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('badgeFichierIndicator');
+            const text = document.getElementById('badgeFichierText');
+            if (indicator && text) {
+                if (data.complete) {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '';
+                    text.textContent = 'Premium (API Key)';
+                } else {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '#fbbf24';
+                    text.textContent = 'Tự động (Free)';
+                }
+            }
+        })
+        .catch(() => {
+            const indicator = document.getElementById('badgeFichierIndicator');
+            const text = document.getElementById('badgeFichierText');
+            if (indicator && text) {
+                indicator.className = 'badge-indicator inactive';
+                indicator.style.backgroundColor = '';
                 text.textContent = 'Lỗi kết nối';
             }
         });
@@ -2226,6 +2254,108 @@ var loadFshareConfigBtn = document.getElementById('loadFshareConfigBtn');
 var saveFshareConfigBtn = document.getElementById('saveFshareConfigBtn');
 if (loadFshareConfigBtn) loadFshareConfigBtn.addEventListener('click', loadFshareConfig);
 if (saveFshareConfigBtn) saveFshareConfigBtn.addEventListener('click', saveFshareConfig);
+
+// ==================== FICHIER CONFIG ====================
+function loadFichierConfig() {
+    var apiKey = document.getElementById('fichierApiKey');
+    var status = document.getElementById('fichierConfigStatus');
+    if (!apiKey || !status) return;
+
+    status.textContent = 'Đang tải cấu hình 1fichier...';
+    status.className = 'config-status';
+
+    fetch('/api/fichier/config')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            apiKey.value = '';
+            status.textContent = data.complete
+                ? '✅ 1fichier đã cấu hình (API Key: ' + data.api_key_masked + ')'
+                : 'ℹ️ Chưa cấu hình API Key. Hệ thống sẽ dùng chế độ Tự động (Free).';
+            status.className = data.complete ? 'config-status success' : 'config-status';
+            checkConfigStatus();
+        })
+        .catch(function () {
+            status.textContent = '❌ Không tải được cấu hình 1fichier';
+            status.className = 'config-status error';
+        });
+}
+
+function saveFichierConfig() {
+    var apiKey = document.getElementById('fichierApiKey');
+    var status = document.getElementById('fichierConfigStatus');
+    if (!apiKey || !status) return;
+
+    status.textContent = 'Đang lưu 1fichier...';
+    status.className = 'config-status';
+
+    var payload = {
+        api_key: apiKey.value.trim() || '__KEEP__'
+    };
+
+    fetch('/api/fichier/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = data.complete ? '✅ Đã lưu API Key 1fichier!' : 'ℹ️ Đã xóa API Key, chuyển sang chế độ Tự động (Free).';
+                status.className = data.complete ? 'config-status success' : 'config-status';
+                apiKey.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi lưu 1fichier');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+function clearFichierConfig() {
+    var apiKey = document.getElementById('fichierApiKey');
+    var status = document.getElementById('fichierConfigStatus');
+    if (!apiKey || !status) return;
+
+    if (!confirm('Bạn có chắc chắn muốn xóa API Key 1fichier và chuyển về chế độ Tự động (Free)?')) {
+        return;
+    }
+
+    status.textContent = 'Đang xóa API Key...';
+    status.className = 'config-status';
+
+    fetch('/api/fichier/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: '' })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = 'ℹ️ Đã xóa API Key, chuyển sang chế độ Tự động (Free).';
+                status.className = 'config-status success';
+                apiKey.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi xóa API Key');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+var loadFichierConfigBtn = document.getElementById('loadFichierConfigBtn');
+var clearFichierConfigBtn = document.getElementById('clearFichierConfigBtn');
+var saveFichierConfigBtn = document.getElementById('saveFichierConfigBtn');
+if (loadFichierConfigBtn) loadFichierConfigBtn.addEventListener('click', loadFichierConfig);
+if (clearFichierConfigBtn) clearFichierConfigBtn.addEventListener('click', clearFichierConfig);
+if (saveFichierConfigBtn) saveFichierConfigBtn.addEventListener('click', saveFichierConfig);
 
 // ==================== SA MANAGEMENT ====================
 var saUploadArea = document.getElementById('saUploadArea');
