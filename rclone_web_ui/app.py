@@ -843,16 +843,21 @@ def start_download():
     if not raw_text or not output_dir_raw:
         return jsonify({'error': 'Source and Destination are required'}), 400
 
-    # Clean destination: extract exactly <remote>:<id> (no trailing garbage)
+    # Clean destination: normalize multiple/double slashes and keep nested paths
     dest_cleaned = output_dir_raw.strip()
     if 'drive.google.com' in dest_cleaned:
         fid = extract_drive_id(dest_cleaned)
         if fid: dest_cleaned = f'gc:{fid}'
     else:
-        # Extract first valid remote:ID pattern, stopping at non-ID chars
-        m = re.match(r'([A-Za-z0-9_-]+:[A-Za-z0-9_-]+)', dest_cleaned)
-        if m:
-            dest_cleaned = m.group(1)
+        if ':' in dest_cleaned:
+            parts = dest_cleaned.split(':', 1)
+            remote = parts[0].strip()
+            path = parts[1].strip()
+            path = re.sub(r'/+', '/', path).strip('/')
+            if path:
+                dest_cleaned = f"{remote}:{path}"
+            else:
+                dest_cleaned = f"{remote}:"
 
     file_password = data.get('file_password', data.get('password', ''))
 

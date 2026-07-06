@@ -201,6 +201,13 @@ class FichierEngine:
            'could be deleted' in html.lower():
             return {'error': 'File 1fichier khong ton tai hoac da bi xoa.'}
 
+        # Check: IP block / professional infrastructure
+        if 'Accès restreint' in html or \
+           'professional infrastructure detected' in html or \
+           'unauthorized personal VPN' in html or \
+           'belonging to a server' in html.lower():
+            return {'error': 'IP VPS bi 1fichier chan (professional infrastructure/VPN detected). Ban can dung Premium API Key co CDN Credits.'}
+
         # Check: rate limit / must wait between downloads
         wait_match = re.search(
             r'You must wait (\d+) minutes?', html, re.I)
@@ -228,8 +235,8 @@ class FichierEngine:
 
         if wait_time > 0:
             self.log_callback(logging.INFO,
-                              "Can cho {0} giay (tai khoan Free)...".format(
-                                  wait_time))
+                               "Can cho {0} giay (tai khoan Free)...".format(
+                                   wait_time))
             for remaining in range(wait_time, 0, -1):
                 if self.stop_checker() or self._stopped:
                     return {'error': 'Da dung boi nguoi dung.'}
@@ -250,15 +257,23 @@ class FichierEngine:
         html2 = resp2.text or ''
 
         # Extract direct download link
-        link_match = re.search(
+        links = re.findall(
             r'href="(https?://[a-z0-9\-]+\.1fichier\.com/[^"]+)"',
             html2, re.I)
-        if not link_match:
-            return {'error': 'Khong tim thay link tai truc tiep tu 1fichier.'}
+        
+        # Filter out static assets
+        direct_url = None
+        for link in links:
+            if not any(link.lower().endswith(ext) for ext in ['.css', '.ico', '.png', '.jpg', '.jpeg', '.js', '.gif', '.svg']):
+                direct_url = link
+                break
+
+        if not direct_url:
+            return {'error': 'Không tìm thấy link tải trực tiếp từ 1fichier.'}
 
         result = {
             'success': True,
-            'url': link_match.group(1),
+            'url': direct_url,
             'file_name': file_name,
             'file_size_text': size_text,
         }
@@ -272,7 +287,7 @@ class FichierEngine:
             if 'error' not in result:
                 return result
             self.log_callback(logging.WARNING,
-                              "API Premium that bai, thu che do Free...")
+                               "API Premium that bai, thu che do Free...")
         return self._get_direct_link_free(url)
 
     # ── file info ──────────────────────────────────────────
@@ -291,9 +306,15 @@ class FichierEngine:
         }
 
         try:
+            # Try HEAD first
             r = requests.head(direct['url'], allow_redirects=True,
                               timeout=20,
                               headers=self._headers({'Accept': '*/*'}))
+            # Fallback to GET stream if HEAD fails or doesn't return Content-Length
+            if not r.ok or not r.headers.get('Content-Length'):
+                r = requests.get(direct['url'], stream=True, allow_redirects=True,
+                                 timeout=20,
+                                 headers=self._headers({'Accept': '*/*'}))
             if r.ok:
                 size = int(r.headers.get('Content-Length') or 0)
                 cd = r.headers.get('Content-Disposition', '')
@@ -302,6 +323,10 @@ class FichierEngine:
                     info['file_name'] = self._safe_name(m.group(1))
                 info['file_size'] = size
                 info['file_size_human'] = self._human_size(size)
+                try:
+                    r.close()
+                except Exception:
+                    pass
         except Exception:
             pass
 
