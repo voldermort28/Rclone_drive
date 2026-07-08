@@ -2008,6 +2008,67 @@ function loadQueueLight() {
     xhr.send();
 }
 
+window.copyToClipboard = function(text, btnElement) {
+    if (!text) return;
+    function success() {
+        if (btnElement) {
+            var oldText = btnElement.textContent;
+            btnElement.textContent = 'Copied!';
+            btnElement.style.color = '#10b981';
+            setTimeout(function() {
+                btnElement.textContent = oldText;
+                btnElement.style.color = '';
+            }, 2000);
+        }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(success).catch(function() {
+            fallbackCopy(text, success);
+        });
+    } else {
+        fallbackCopy(text, success);
+    }
+};
+
+function fallbackCopy(text, successCallback) {
+    var textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+        document.execCommand('copy');
+        successCallback();
+    } catch (err) {
+        alert('Không thể copy, vui lòng tự copy: ' + text);
+    }
+    document.body.removeChild(textArea);
+}
+
+function formatUrlsHtml(urlsStr) {
+    if (!urlsStr) return 'N/A';
+    var parts = urlsStr.split(',');
+    var htmlParts = [];
+    parts.forEach(function(part) {
+        part = part.trim();
+        if (!part) return;
+        var displayUrl = part.substring(0, 50) + (part.length > 50 ? '...' : '');
+        if (part.startsWith('http')) {
+            htmlParts.push('<div style="display: flex; align-items: center; margin-bottom: 4px;">' +
+                '<a href="' + part + '" target="_blank" style="color: #60a5fa; text-decoration: underline;" title="' + part + '">' + displayUrl + '</a>' +
+                ' <button onclick="copyToClipboard(\'' + part.replace(/'/g, "\\'") + '\', this)" class="btn-secondary" style="margin-left: 6px; padding: 2px 6px; font-size: 10px; line-height: 1; border-color: #475569;" title="Copy link">Copy</button>' +
+                '</div>');
+        } else {
+            htmlParts.push('<div style="display: flex; align-items: center; margin-bottom: 4px;">' +
+                '<span title="' + part + '">' + displayUrl + '</span>' +
+                ' <button onclick="copyToClipboard(\'' + part.replace(/'/g, "\\'") + '\', this)" class="btn-secondary" style="margin-left: 6px; padding: 2px 6px; font-size: 10px; line-height: 1; border-color: #475569;" title="Copy link">Copy</button>' +
+                '</div>');
+        }
+    });
+    return htmlParts.join('');
+}
+
 function renderQueue(records) {
     var tbody = document.getElementById('queueListBody');
     if (!records || records.length === 0) {
@@ -2040,25 +2101,27 @@ function renderQueue(records) {
             execTimeStr = "Sẵn sàng";
         }
 
-        var urls = (rec.urls || '').substring(0, 100) + ((rec.urls || '').length > 100 ? '...' : '');
+        var urlsHtml = formatUrlsHtml(rec.urls || '');
 
         var jobType = rec.type || 'rclone';
         var typeBadge = '';
         if (jobType === 'fshare') {
-            typeBadge = '<span class="status-badge" style="background-color: #3b82f6; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Fshare</span>';
+            typeBadge = '<span class="status-badge" style="background-color: #3b82f6; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Fshare</span>';
         } else if (jobType === 'mediafire') {
-            typeBadge = '<span class="status-badge" style="background-color: #f97316; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">MediaFire</span>';
+            typeBadge = '<span class="status-badge" style="background-color: #f97316; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">MediaFire</span>';
         } else if (jobType === 'terabox') {
-            typeBadge = '<span class="status-badge" style="background-color: #10b981; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Terabox</span>';
+            typeBadge = '<span class="status-badge" style="background-color: #10b981; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Terabox</span>';
         } else if (jobType === 'mega') {
-            typeBadge = '<span class="status-badge" style="background-color: #ef4444; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">Mega</span>';
+            typeBadge = '<span class="status-badge" style="background-color: #ef4444; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Mega</span>';
         } else {
-            typeBadge = '<span class="status-badge" style="background-color: #6366f1; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px;">GDrive</span>';
+            typeBadge = '<span class="status-badge" style="background-color: #6366f1; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">GDrive</span>';
         }
 
         row.innerHTML =
             '<td><strong style="color: #60a5fa;">' + execTimeStr + '</strong></td>' +
-            '<td style="word-break: break-all; max-width: 300px;">' + typeBadge + urls + '</td>' +
+            '<td style="word-break: break-all; max-width: 450px;">' +
+            '<div style="display: flex; align-items: flex-start; flex-wrap: wrap;">' + typeBadge + '<div style="flex: 1; min-width: 0;">' + urlsHtml + '</div></div>' +
+            '</td>' +
             '<td style="word-break: break-all;">' + (rec.dest || 'N/A') + '</td>' +
             '<td>' + statusHtml + '</td>' +
             '<td><button type="button" class="btn-secondary" style="padding: 4px 8px; font-size: 12px; border-color: #ef4444; color: #ef4444;" onclick="event.stopPropagation(); removeQueue(\'' + rec.id + '\')">Hủy</button></td>';
@@ -2499,11 +2562,11 @@ function renderHistory(records) {
             statusHtml = '<span class="status-badge">' + rec.status + '</span>';
         }
 
-        var urls = (rec.urls || '').substring(0, 50) + '...';
+        var urlsHtml = formatUrlsHtml(rec.urls || '');
 
         row.innerHTML =
             '<td>' + (rec.time || 'N/A') + '</td>' +
-            '<td style="word-break: break-all; max-width: 300px;">' + urls + '</td>' +
+            '<td style="word-break: break-all; max-width: 450px;">' + urlsHtml + '</td>' +
             '<td style="word-break: break-all;">' + (rec.dest || 'N/A') + '</td>' +
             '<td>' + statusHtml + '</td>';
 
