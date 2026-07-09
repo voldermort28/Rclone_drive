@@ -49,9 +49,9 @@ jobs:
           chmod +x "$GCLONE_BIN"
           sudo mv "$GCLONE_BIN" /usr/bin/rclone
           rm -rf gclone.zip gclone-v*
-          echo "=== Installing 7-Zip & Unrar ==="
+          echo "=== Installing 7-Zip, Unrar & FUSE ==="
           sudo apt-get update
-          sudo apt-get install p7zip-full unrar -y
+          sudo apt-get install p7zip-full unrar fuse3 -y
 
       - name: Setup Rclone Configuration
         run: |
@@ -77,29 +77,19 @@ jobs:
             echo "Password: None"
           fi
           
-          # Setup directories
-          DOWNLOAD_DIR="/home/runner/download"
-          WORK_DIR="/home/runner/work"
-          EXTRACT_DIR="/home/runner/extracted"
-          mkdir -p "$DOWNLOAD_DIR" "$WORK_DIR" "$EXTRACT_DIR"
-          
-          # 1. Determine destination path and handle single file vs folder
-          # Parse remote and path part
+          # 1. Determine target directory and normalize remote path
           if [[ "$REMOTE_PATH" =~ ^([^:]+):(.*)$ ]]; then
             REMOTE_NAME="${BASH_REMATCH[1]}"
             PATH_PART="${BASH_REMATCH[2]}"
             HAS_REMOTE=true
           else
-            # Default to 'gc' remote if no remote prefix is provided
             REMOTE_NAME="gc"
             PATH_PART="$REMOTE_PATH"
             HAS_REMOTE=true
           fi
 
-          # Strip trailing slash from PATH_PART if present
           PATH_PART="${PATH_PART%/}"
 
-          # Detect Google Drive folder ID in the path and wrap with curly braces for gclone/rclone
           if [[ "$PATH_PART" =~ ^([A-Za-z0-9_-]{15,})(/.*)?$ ]]; then
             FOLDER_ID="${BASH_REMATCH[1]}"
             SUBPATH="${BASH_REMATCH[2]}"
@@ -108,14 +98,12 @@ jobs:
             fi
           fi
 
-          # Reconstruct normalized REMOTE_PATH
           if [ "$HAS_REMOTE" = "true" ]; then
             CLEANED_PATH="${REMOTE_NAME}:${PATH_PART}"
           else
             CLEANED_PATH="${PATH_PART}"
           fi
 
-          # Extract parent path and basename
           if [ -z "$PATH_PART" ]; then
             PARENT_PATH="$CLEANED_PATH"
             BASENAME=""
@@ -142,128 +130,132 @@ jobs:
           echo "Parent Path: $PARENT_PATH"
           echo "Basename: $BASENAME"
 
-          # Check if targeted path is a folder by using rclone lsd
           IS_FOLDER=false
           if [[ "$REMOTE_PATH" == */ ]] || rclone lsd "$CLEANED_PATH" >/dev/null 2>&1; then
             IS_FOLDER=true
           fi
-
           echo "Is Folder: $IS_FOLDER"
 
-          # 2. Download files to download dir
-          if [ "$IS_FOLDER" = "true" ]; then
-            # If folder, copy matching archives
-            echo "=== Downloading folder contents ==="
-            rclone copy "$CLEANED_PATH/" "$DOWNLOAD_DIR/" \
-              --include "*.{zip,rar,7z,tar,gz,zip.*,rar.*,7z.*,z0*,r[0-9]*,part*}" \
-              --transfers 8 -P
-            DEST_PATH="$CLEANED_PATH"
-          else
-            # If file, copy the specific file or all parts of the split file
-            echo "=== Checking file type for split files ==="
-
-            # Detect zip.001, rar.001, etc.
-            if [[ "$BASENAME" =~ \.(zip|rar|7z)\.[0-9]+$ ]]; then
-              echo "Split file detected (.001 format)"
-              # Extract prefix before the .001 (e.g. file.zip)
-              PREFIX="${BASENAME%.*}"
-              echo "Downloading all parts for: $PREFIX"
-              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.*" --transfers 8 -P
-
-            # Detect .part1.rar or .part01.rar
-            elif [[ "$BASENAME" =~ \.part0*[1]\.rar$ ]]; then
-              echo "Split WinRAR detected (.part1.rar format)"
-              # Get prefix before part1.rar (e.g. movies.part1.rar -> movies.)
-              # Extract everything before .part
-              PREFIX=$(echo "$BASENAME" | sed -E 's/\.part0*[0-9]+\.rar//I')
-              echo "Downloading all parts starting with: $PREFIX.part"
-              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" --include "$PREFIX.part*.rar" --include "$PREFIX.part*.RAR" --transfers 8 -P
-
-            # Detect old split WinRAR (.rar, .r00, .r01 format)
-            elif [[ "$BASENAME" =~ \.rar$ || "$BASENAME" =~ \.r[0-9]+$ ]]; then
-              echo "Split old WinRAR detected (.r00 format)"
-              PREFIX=$(echo "$BASENAME" | sed -E 's/\.(rar|r[0-9]+)$//I')
-              echo "Downloading all parts starting with: $PREFIX"
-              rclone copy "$PARENT_PATH/" "$DOWNLOAD_DIR/" \
-                --include "$PREFIX.rar" \
-                --include "$PREFIX.RAR" \
-                --include "$PREFIX.r[0-9]*" \
-                --include "$PREFIX.R[0-9]*" \
-                --transfers 8 -P
-
-            # Standard single archive file
-            else
-              echo "Single archive file detected"
-              rclone copyto "$CLEANED_PATH" "$DOWNLOAD_DIR/$BASENAME" -P
+          # 2. Setup mount point and mount Google Drive
+          MNT_DIR="/home/runner/mnt"
+          mkdir -p "$MNT_DIR"
+          
+          echo "=== Mounting Parent Path: $PARENT_PATH ==="
+          rclone mount "$PARENT_PATH/" "$MNT_DIR" --vfs-cache-mode writes --rc --daemon
+          
+          # Wait for mount to be ready
+          echo "=== Waiting for mount to be ready ==="
+          MOUNTED=false
+          for i in {1..20}; do
+            if mountpoint -q "$MNT_DIR"; then
+              echo "Mount successful!"
+              MOUNTED=true
+              break
             fi
-            DEST_PATH="$PARENT_PATH"
+            sleep 1
+          done
+          
+          if [ "$MOUNTED" = "false" ]; then
+            echo "Error: Failed to mount $PARENT_PATH to $MNT_DIR"
+            exit 1
           fi
-          
-          # 3. Processing and Extraction
-          echo "=== Processing downloaded files ==="
-          ls -la "$DOWNLOAD_DIR"
-          
-          cd "$DOWNLOAD_DIR"
-          
-          # Find split zip/rar/7z files (.001 format) to merge first
-          SPLIT_FILES=$(find . -name "*.001" | sort)
-          if [ -n "$SPLIT_FILES" ]; then
-            for f in $SPLIT_FILES; do
-              BASE_ARCHIVE=$(basename "$f" .001)
-              echo "Merging split archive: $BASE_ARCHIVE.*"
-              cat "$BASE_ARCHIVE".[0-9]* > "$WORK_DIR/$BASE_ARCHIVE"
-              echo "Extracting merged archive: $BASE_ARCHIVE"
-              if [ -n "$PASSWORD" ]; then
-                7z x "$WORK_DIR/$BASE_ARCHIVE" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
-              else
-                7z x "$WORK_DIR/$BASE_ARCHIVE" -p- -o"$EXTRACT_DIR" -y
-              fi
-              rm -f "$WORK_DIR/$BASE_ARCHIVE"
-            done
-          fi
-          
-          # Find split WinRAR files (.part1.rar) to extract (match part1.rar, part01.rar, etc. via regex)
-          PART_RAR_FILES=$(find . -regextype posix-extended -iregex '.*part0*1\.rar' | sort)
 
-          if [ -n "$PART_RAR_FILES" ]; then
+          # 3. Processing and Extraction
+          echo "=== Processing Extraction ==="
+          P_ARG="-p-"
+          if [ -n "$PASSWORD" ]; then
+            P_ARG="-p$PASSWORD"
+          fi
+
+          if [ "$IS_FOLDER" = "true" ]; then
+            echo "=== Processing folder extraction ==="
+            TARGET_DIR="$MNT_DIR/$BASENAME"
+            cd "$TARGET_DIR"
+            
+            # Find split zip/rar/7z files (.001 format) to extract
+            SPLIT_FILES=$(find . -maxdepth 2 -name "*.001" | sort)
+            for f in $SPLIT_FILES; do
+              echo "Extracting split archive: $f"
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
+            done
+            
+            # Find split WinRAR files (.part1.rar) to extract
+            PART_RAR_FILES=$(find . -maxdepth 2 -regextype posix-extended -iregex '.*part0*1\.rar' | sort)
             for f in $PART_RAR_FILES; do
               echo "Extracting multipart RAR: $f"
-              if [ -n "$PASSWORD" ]; then
-                7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
-              else
-                7z x "$f" -p- -o"$EXTRACT_DIR" -y
-              fi
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
             done
-          fi
-          
-          # Find other standard archives (.zip, .rar, .7z) that are not part of split files
-          # Exclude .001, .002... and part2, part3...
-          STANDARD_ARCHIVES=$(find . -type f \( -name "*.zip" -o -name "*.rar" -o -name "*.7z" \) | sort)
-          if [ -n "$STANDARD_ARCHIVES" ]; then
+            
+            # Find standard archives (.zip, .rar, .7z)
+            STANDARD_ARCHIVES=$(find . -maxdepth 2 -type f \( -name "*.zip" -o -name "*.rar" -o -name "*.7z" \) | sort)
             for f in $STANDARD_ARCHIVES; do
-              # Skip if this is a part of split rar (handled by *part0*1.rar)
+              # Skip split rar parts (e.g. part2, part02)
               if [[ "$f" =~ [pP]art[0-9]+ ]]; then
-                echo "Skipping split part: $f (will be handled by part1)"
+                if [[ ! "$f" =~ [pP]art0*1\.rar ]]; then
+                  echo "Skipping split part: $f"
+                  continue
+                fi
+              fi
+              # Skip split parts (.001, .002)
+              if [[ "$f" =~ \.[0-9]+$ ]]; then
                 continue
               fi
               echo "Extracting standard archive: $f"
-              if [ -n "$PASSWORD" ]; then
-                7z x "$f" -p"$PASSWORD" -o"$EXTRACT_DIR" -y
-              else
-                7z x "$f" -p- -o"$EXTRACT_DIR" -y
-              fi
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
             done
+          else
+            echo "=== Processing single file extraction ==="
+            TARGET_FILE="$BASENAME"
+            
+            # Normalize split archive to the first part
+            if [[ "$BASENAME" =~ ^(.*)\.(zip|rar|7z)\.[0-9]+$ ]]; then
+              PREFIX="${BASENAME%.*}"
+              TARGET_FILE="${PREFIX}.001"
+              echo "Normalized split archive to: $TARGET_FILE"
+            elif [[ "$BASENAME" =~ ^(.*)\.part[0-9]+\.rar$ ]]; then
+              PREFIX=$(echo "$BASENAME" | sed -E 's/\.part[0-9]+\.rar//I')
+              if [ -f "$MNT_DIR/${PREFIX}.part01.rar" ]; then
+                TARGET_FILE="${PREFIX}.part01.rar"
+              else
+                TARGET_FILE="${PREFIX}.part1.rar"
+              fi
+              echo "Normalized multipart RAR to: $TARGET_FILE"
+            elif [[ "$BASENAME" =~ ^(.*)\.r[0-9]+$ ]]; then
+              PREFIX=$(echo "$BASENAME" | sed -E 's/\.r[0-9]+$//I')
+              TARGET_FILE="${PREFIX}.rar"
+              echo "Normalized old multipart RAR to: $TARGET_FILE"
+            fi
+
+            echo "Extracting target file: $TARGET_FILE"
+            7z x "$MNT_DIR/$TARGET_FILE" "$P_ARG" -o"$MNT_DIR" -y
           fi
           
           echo "=== Extraction completed ==="
-          ls -la "$EXTRACT_DIR"
-
-          echo "=== Cleaning up downloaded archives to free disk space ==="
-          rm -rf "$DOWNLOAD_DIR" "$WORK_DIR"
           
-          # 4. Upload extracted files back to Google Drive
-          echo "=== Uploading extracted content to Google Drive ==="
-          echo "Destination: $DEST_PATH"
-          rclone copy "$EXTRACT_DIR/" "$DEST_PATH/" --transfers 8 -P --stats-one-line
+          # 4. Wait for background uploads to complete
+          echo "=== Waiting for background uploads to complete ==="
+          while true; do
+            STATS=$(rclone rc vfs/stats 2>/dev/null || echo "")
+            if [ -z "$STATS" ]; then
+              echo "RC API not responding, checking cache directory..."
+              CACHE_FILES=$(find ~/.cache/rclone/vfs -type f 2>/dev/null | wc -l || echo "0")
+              if [ "$CACHE_FILES" -eq 0 ]; then
+                echo "VFS cache is empty."
+                break
+              fi
+              echo "VFS cache contains $CACHE_FILES files. Waiting 10s..."
+            else
+              IN_PROGRESS=$(echo "$STATS" | grep -o '"uploadsInProgress": [0-9]*' | awk '{print $2}' || echo "0")
+              QUEUED=$(echo "$STATS" | grep -o '"uploadsQueued": [0-9]*' | awk '{print $2}' || echo "0")
+              echo "Active uploads: $IN_PROGRESS | Queued uploads: $QUEUED"
+              if [ "$IN_PROGRESS" = "0" ] && [ "$QUEUED" = "0" ]; then
+                echo "All background uploads are complete!"
+                break
+              fi
+            fi
+            sleep 10
+          done
           
-          echo "=== Done ==="
+          echo "=== Unmounting ==="
+          sudo umount -f "$MNT_DIR" || true
+          echo "=== Completed successfully ==="
