@@ -146,9 +146,23 @@ jobs:
           MNT_DIR="/home/runner/mnt"
           mkdir -p "$MNT_DIR"
           
-          echo "=== Mounting Parent Path: $PARENT_PATH ==="
+          if [ "$IS_FOLDER" = "true" ]; then
+            MOUNT_PATH="$CLEANED_PATH"
+          else
+            MOUNT_PATH="$PARENT_PATH"
+            # Lấy tên hiển thị thực tế của file ID bằng rclone lsf
+            echo "Resolving real filename for $CLEANED_PATH..."
+            REAL_NAME=$(rclone lsf "$CLEANED_PATH" | head -n 1)
+            REAL_NAME="${REAL_NAME%/}"
+            if [ -z "$REAL_NAME" ]; then
+              REAL_NAME="$BASENAME"
+            fi
+            echo "Resolved filename: $REAL_NAME"
+          fi
+          
+          echo "=== Mounting Path: $MOUNT_PATH ==="
           sudo modprobe fuse || true
-          rclone mount "$PARENT_PATH" "$MNT_DIR" --vfs-cache-mode writes --rc > /home/runner/rclone.log 2>&1 &
+          rclone mount "$MOUNT_PATH" "$MNT_DIR" --vfs-cache-mode writes --rc > /home/runner/rclone.log 2>&1 &
           RCLONE_PID=$!
           
           # Wait for mount to be ready
@@ -169,7 +183,7 @@ jobs:
           done
           
           if [ "$MOUNTED" = "false" ]; then
-            echo "Error: Failed to mount $PARENT_PATH to $MNT_DIR (Timeout)"
+            echo "Error: Failed to mount $MOUNT_PATH to $MNT_DIR (Timeout)"
             cat /home/runner/rclone.log
             exit 1
           fi
@@ -183,7 +197,7 @@ jobs:
 
           if [ "$IS_FOLDER" = "true" ]; then
             echo "=== Processing folder extraction ==="
-            TARGET_DIR="$MNT_DIR/$BASENAME"
+            TARGET_DIR="$MNT_DIR"
             cd "$TARGET_DIR"
             
             # Find split zip/rar/7z files (.001 format) to extract
@@ -219,23 +233,23 @@ jobs:
             done
           else
             echo "=== Processing single file extraction ==="
-            TARGET_FILE="$BASENAME"
+            TARGET_FILE="$REAL_NAME"
             
             # Normalize split archive to the first part
-            if [[ "$BASENAME" =~ ^(.*)\.(zip|rar|7z)\.[0-9]+$ ]]; then
-              PREFIX="${BASENAME%.*}"
+            if [[ "$REAL_NAME" =~ ^(.*)\.(zip|rar|7z)\.[0-9]+$ ]]; then
+              PREFIX="${REAL_NAME%.*}"
               TARGET_FILE="${PREFIX}.001"
               echo "Normalized split archive to: $TARGET_FILE"
-            elif [[ "$BASENAME" =~ ^(.*)\.part[0-9]+\.rar$ ]]; then
-              PREFIX=$(echo "$BASENAME" | sed -E 's/\.part[0-9]+\.rar//I')
+            elif [[ "$REAL_NAME" =~ ^(.*)\.part[0-9]+\.rar$ ]]; then
+              PREFIX=$(echo "$REAL_NAME" | sed -E 's/\.part[0-9]+\.rar//I')
               if [ -f "$MNT_DIR/${PREFIX}.part01.rar" ]; then
                 TARGET_FILE="${PREFIX}.part01.rar"
               else
                 TARGET_FILE="${PREFIX}.part1.rar"
               fi
               echo "Normalized multipart RAR to: $TARGET_FILE"
-            elif [[ "$BASENAME" =~ ^(.*)\.r[0-9]+$ ]]; then
-              PREFIX=$(echo "$BASENAME" | sed -E 's/\.r[0-9]+$//I')
+            elif [[ "$REAL_NAME" =~ ^(.*)\.r[0-9]+$ ]]; then
+              PREFIX=$(echo "$REAL_NAME" | sed -E 's/\.r[0-9]+$//I')
               TARGET_FILE="${PREFIX}.rar"
               echo "Normalized old multipart RAR to: $TARGET_FILE"
             fi
