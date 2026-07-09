@@ -50,8 +50,14 @@ jobs:
           sudo mv "$GCLONE_BIN" /usr/bin/rclone
           rm -rf gclone.zip gclone-v*
           echo "=== Installing 7-Zip, Unrar & FUSE ==="
-          sudo apt-get update
-          sudo apt-get install p7zip-full unrar fuse3 -y
+          export DEBIAN_FRONTEND=noninteractive
+          sudo -E apt-get update
+          sudo -E apt-get install p7zip-full unrar fuse3 -y
+          # Tạo symlink cho fusermount nếu thiếu (gclone cũ yêu cầu fusermount thay vì fusermount3)
+          if ! command -v fusermount >/dev/null 2>&1 && command -v fusermount3 >/dev/null 2>&1; then
+            echo "Creating symlink for fusermount"
+            sudo ln -s $(which fusermount3) /usr/bin/fusermount
+          fi
 
       - name: Setup Rclone Configuration
         run: |
@@ -141,7 +147,9 @@ jobs:
           mkdir -p "$MNT_DIR"
           
           echo "=== Mounting Parent Path: $PARENT_PATH ==="
-          rclone mount "$PARENT_PATH/" "$MNT_DIR" --vfs-cache-mode writes --rc --daemon
+          sudo modprobe fuse || true
+          rclone mount "$PARENT_PATH" "$MNT_DIR" --vfs-cache-mode writes --rc > /home/runner/rclone.log 2>&1 &
+          RCLONE_PID=$!
           
           # Wait for mount to be ready
           echo "=== Waiting for mount to be ready ==="
@@ -152,11 +160,17 @@ jobs:
               MOUNTED=true
               break
             fi
+            if ! kill -0 $RCLONE_PID 2>/dev/null; then
+              echo "Error: Rclone mount process died immediately!"
+              cat /home/runner/rclone.log
+              exit 1
+            fi
             sleep 1
           done
           
           if [ "$MOUNTED" = "false" ]; then
-            echo "Error: Failed to mount $PARENT_PATH to $MNT_DIR"
+            echo "Error: Failed to mount $PARENT_PATH to $MNT_DIR (Timeout)"
+            cat /home/runner/rclone.log
             exit 1
           fi
 
@@ -176,14 +190,14 @@ jobs:
             SPLIT_FILES=$(find . -maxdepth 2 -name "*.001" | sort)
             for f in $SPLIT_FILES; do
               echo "Extracting split archive: $f"
-              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y < /dev/null
             done
             
             # Find split WinRAR files (.part1.rar) to extract
             PART_RAR_FILES=$(find . -maxdepth 2 -regextype posix-extended -iregex '.*part0*1\.rar' | sort)
             for f in $PART_RAR_FILES; do
               echo "Extracting multipart RAR: $f"
-              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y < /dev/null
             done
             
             # Find standard archives (.zip, .rar, .7z)
@@ -201,7 +215,7 @@ jobs:
                 continue
               fi
               echo "Extracting standard archive: $f"
-              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y
+              7z x "$f" "$P_ARG" -o"$TARGET_DIR" -y < /dev/null
             done
           else
             echo "=== Processing single file extraction ==="
@@ -227,7 +241,7 @@ jobs:
             fi
 
             echo "Extracting target file: $TARGET_FILE"
-            7z x "$MNT_DIR/$TARGET_FILE" "$P_ARG" -o"$MNT_DIR" -y
+            7z x "$MNT_DIR/$TARGET_FILE" "$P_ARG" -o"$MNT_DIR" -y < /dev/null
           fi
           
           echo "=== Extraction completed ==="
