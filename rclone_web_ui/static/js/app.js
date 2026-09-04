@@ -1851,9 +1851,10 @@ async function poll() {
 
         updateUI(state);
 
-        // Auto-refresh queue tab if user is viewing it
+        // Auto-refresh queue and history tab if user is viewing it
         if (document.getElementById('tab-history').classList.contains('active')) {
             loadQueueLight();
+            loadHistoryLight();
         }
 
         // We always poll if there's an active job or queue exists
@@ -2525,14 +2526,20 @@ async function checkActiveTransfer() {
 function loadHistory() {
     var tbody = document.getElementById('historyListBody');
     tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px;">Đang tải...</td></tr>';
+    loadHistoryLight();
+}
 
+function loadHistoryLight() {
+    var tbody = document.getElementById('historyListBody');
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/api/history", true);
     xhr.onreadystatechange = function () {
         if (xhr.readyState === 4) {
             if (xhr.status === 200) {
-                renderHistory(JSON.parse(xhr.responseText));
-            } else {
+                try {
+                    renderHistory(JSON.parse(xhr.responseText));
+                } catch(e) {}
+            } else if (tbody && tbody.children.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 20px;">Lỗi tải lịch sử</td></tr>';
             }
         }
@@ -2542,6 +2549,7 @@ function loadHistory() {
 
 function renderHistory(records) {
     var tbody = document.getElementById('historyListBody');
+    if (!tbody) return;
     if (!records || records.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px; color: var(--text-muted);">Trống</td></tr>';
         return;
@@ -2555,11 +2563,13 @@ function renderHistory(records) {
         if (rec.status === 'completed') {
             statusHtml = '<span class="status-badge status-completed">Hoàn thành</span>';
         } else if (rec.status === 'error') {
-            statusHtml = '<span class="status-badge status-error" title="' + (rec.message || '') + '">Lỗi</span>';
+            var errMsg = (rec.message || 'Lỗi không xác định').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            statusHtml = '<span class="status-badge status-error" title="' + (rec.message || '') + '">Lỗi</span>' +
+                (rec.message ? '<div style="font-size: 11px; color: #f87171; margin-top: 4px; word-break: break-word; max-width: 250px;">' + errMsg + '</div>' : '');
         } else if (rec.status === 'downloading' || rec.status === 'initializing') {
             statusHtml = '<span class="status-badge" style="background-color: #3b82f6; color: white;">Đang tải (' + (rec.progress || 0) + '%)</span>';
         } else {
-            statusHtml = '<span class="status-badge">' + rec.status + '</span>';
+            statusHtml = '<span class="status-badge">' + (rec.status || 'N/A') + '</span>';
         }
 
         var urlsHtml = formatUrlsHtml(rec.urls || '');

@@ -80,6 +80,13 @@ class FshareEngine:
             return [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
         return cmd
 
+    def _path_for_io(self, path):
+        if isinstance(path, bytes):
+            return path
+        if sys.getfilesystemencoding().lower() == 'ascii':
+            return path.encode('utf-8')
+        return path
+
     def _safe_name(self, name):
         name = (name or '').strip()
         name = re.sub(r'[\\/*?:"<>|]', '_', name)
@@ -324,17 +331,19 @@ class FshareEngine:
             total_header = int(self._response.headers.get('Content-Length') or 0)
             total_size = total_header + existing if self._response.status_code == 206 else total_header
             final_path = os.path.join(tmp_dir, file_name)
+            part_path_io = self._path_for_io(part_path)
+            final_path_io = self._path_for_io(final_path)
             mode = 'ab' if self._response.status_code == 206 and existing > 0 else 'wb'
 
-            if mode == 'wb' and os.path.exists(part_path):
-                os.remove(part_path)
+            if mode == 'wb' and os.path.exists(part_path_io):
+                os.remove(part_path_io)
                 existing = 0
 
             self._emit_state(file_name=file_name, file_size=total_size,
                              file_size_human=self._human_size(total_size))
             downloaded = existing
             last_emit = 0
-            with open(part_path, mode) as f:
+            with open(part_path_io, mode) as f:
                 for chunk in self._response.iter_content(chunk_size=self.CHUNK_SIZE):
                     if self.stop_checker() or self._stopped:
                         self.log_callback(logging.WARNING, "Download Fshare bị dừng.")
@@ -350,12 +359,25 @@ class FshareEngine:
                         self._progress(pct, "Downloading: {0}".format(self._human_size(downloaded)))
                         last_emit = now
 
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(part_path, final_path)
+            try:
+                if os.path.exists(final_path_io):
+                    os.remove(final_path_io)
+                os.rename(part_path_io, final_path_io)
+            except Exception:
+                # If unicode rename fails on ascii filesystem, fallback to ascii-safe name
+                import unicodedata
+                ascii_name = unicodedata.normalize('NFKD', file_name).encode('ascii', 'ignore').decode('ascii')
+                if not ascii_name:
+                    ascii_name = "fshare_file_" + str(int(time.time()))
+                final_path = os.path.join(tmp_dir, ascii_name)
+                final_path_io = self._path_for_io(final_path)
+                if os.path.exists(final_path_io):
+                    os.remove(final_path_io)
+                os.rename(part_path_io, final_path_io)
+
             self._progress(50, "Tải Fshare hoàn tất")
-            self.log_callback(logging.INFO, "Đã tải về VPS: {0}".format(final_path))
-            return final_path
+            self.log_callback(logging.INFO, "Đã tải về VPS: {0}".format(file_name))
+            return final_path_io
         except Exception as e:
             self.log_callback(logging.ERROR, "Lỗi tải Fshare: {0}".format(str(e)))
             return None

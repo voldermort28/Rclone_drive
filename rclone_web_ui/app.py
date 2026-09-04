@@ -1,5 +1,11 @@
 import sys
 import io
+import os
+
+# Set default encoding environment if not set
+os.environ['LC_ALL'] = 'en_US.UTF-8'
+os.environ['LANG'] = 'en_US.UTF-8'
+os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # Force stdout/stderr to use UTF-8 regardless of locale
 if hasattr(sys.stdout, 'buffer'):
@@ -13,7 +19,6 @@ if hasattr(sys.stderr, 'buffer'):
     except Exception:
         pass
 
-import os
 import threading
 import logging
 import json
@@ -109,15 +114,18 @@ verify_stop_event = threading.Event()
 def load_queue():
     if os.path.exists(QUEUE_FILE):
         try:
-            with open(QUEUE_FILE, 'r') as f:
+            with open(QUEUE_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
             pass
     return []
 
 def save_queue(q):
-    with open(QUEUE_FILE, 'w') as f:
-        json.dump(q, f)
+    try:
+        with open(QUEUE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(q, f, ensure_ascii=False)
+    except Exception as e:
+        print("Failed to save queue: {0}".format(e))
 
 def detect_url_type(url):
     url_lower = url.lower().strip()
@@ -694,20 +702,23 @@ def queue_worker_loop():
                 try:
                     history_record = {
                         'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'urls': download_state['raw_urls'],
-                        'dest': download_state['output_dir'],
-                        'status': download_state['status'],
-                        'message': download_state['message']
+                        'urls': job_to_run.get('urls') or download_state.get('raw_urls', ''),
+                        'dest': download_state.get('output_dir') or job_to_run.get('dest', ''),
+                        'status': download_state.get('status', 'completed'),
+                        'message': download_state.get('message', '')
                     }
                     histories = []
                     if os.path.exists(HISTORY_FILE):
-                        with open(HISTORY_FILE, 'r') as f:
-                            histories = json.load(f)
+                        try:
+                            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                                histories = json.load(f)
+                        except Exception:
+                            histories = []
                     histories.append(history_record)
-                    with open(HISTORY_FILE, 'w') as f:
-                        json.dump(histories, f)
+                    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(histories, f, ensure_ascii=False)
                 except Exception as e:
-                    print(f"Failed to save history: {e}")
+                    print("Failed to save history: {0}".format(e))
             
             save_queue(q)
             time.sleep(5)
@@ -1001,18 +1012,18 @@ def get_history():
     histories = []
     try:
         if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r') as f:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
                 histories = json.load(f)
     except Exception as e:
-        print(f"Error reading history: {e}")
+        print("Error reading history: {0}".format(e))
         
-    if download_state['status'] in ('downloading', 'initializing'):
+    if download_state.get('status') in ('downloading', 'initializing'):
         active_record = {
             'time': 'Đang chạy...',
-            'urls': download_state['raw_urls'],
-            'dest': download_state['output_dir'],
-            'status': download_state['status'],
-            'message': download_state['message'],
+            'urls': download_state.get('raw_urls', ''),
+            'dest': download_state.get('output_dir', ''),
+            'status': download_state.get('status', ''),
+            'message': download_state.get('message', ''),
             'progress': download_state.get('progress', 0)
         }
         histories.append(active_record)
@@ -1031,7 +1042,7 @@ def get_config():
     conf_path = get_rclone_conf_path()
     try:
         if os.path.exists(conf_path):
-            with open(conf_path, 'r') as f:
+            with open(conf_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
         else:
             content = ''
@@ -1048,7 +1059,7 @@ def save_config():
     conf_path = get_rclone_conf_path()
     try:
         os.makedirs(os.path.dirname(conf_path), exist_ok=True)
-        with open(conf_path, 'w') as f:
+        with open(conf_path, 'w', encoding='utf-8') as f:
             f.write(data['content'])
         return jsonify({'message': 'Config saved', 'path': conf_path})
     except Exception as e:
@@ -1215,11 +1226,11 @@ def handle_dest_history():
         history = []
         if os.path.exists(DEST_HISTORY_FILE):
             try:
-                with open(DEST_HISTORY_FILE, 'r') as f:
+                with open(DEST_HISTORY_FILE, 'r', encoding='utf-8') as f:
                     history = json.load(f)
             except: pass
         history = [h for h in history if h.get('path') != path]
-        with open(DEST_HISTORY_FILE, 'w') as f: json.dump(history, f)
+        with open(DEST_HISTORY_FILE, 'w', encoding='utf-8') as f: json.dump(history, f, ensure_ascii=False)
         return jsonify({'message': 'Deleted'})
 
     if request.method == 'POST':
@@ -1229,7 +1240,7 @@ def handle_dest_history():
         history = []
         if os.path.exists(DEST_HISTORY_FILE):
             try:
-                with open(DEST_HISTORY_FILE, 'r') as f:
+                with open(DEST_HISTORY_FILE, 'r', encoding='utf-8') as f:
                     history = json.load(f)
             except: pass
         # Resolve folder name
@@ -1243,12 +1254,12 @@ def handle_dest_history():
             'used_at': datetime.now().strftime("%Y-%m-%d %H:%M")
         })
         history = history[:20]
-        with open(DEST_HISTORY_FILE, 'w') as f: json.dump(history, f)
+        with open(DEST_HISTORY_FILE, 'w', encoding='utf-8') as f: json.dump(history, f, ensure_ascii=False)
         return jsonify({'message': 'Saved'})
     else:
         if os.path.exists(DEST_HISTORY_FILE):
             try:
-                with open(DEST_HISTORY_FILE, 'r') as f:
+                with open(DEST_HISTORY_FILE, 'r', encoding='utf-8') as f:
                     history = json.load(f)
                 # Auto-resolve missing names for old entries
                 updated = False
@@ -1259,8 +1270,8 @@ def handle_dest_history():
                             h['name'] = resolved
                             updated = True
                 if updated:
-                    with open(DEST_HISTORY_FILE, 'w') as f:
-                        json.dump(history, f)
+                    with open(DEST_HISTORY_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(history, f, ensure_ascii=False)
                 return jsonify(history)
             except: pass
         return jsonify([])
@@ -1353,7 +1364,7 @@ def terabox_cookie():
         if not cookie_val:
             return jsonify({'success': False, 'error': 'Cookie không được để trống'})
         try:
-            with open(TERABOX_COOKIE_FILE, 'w') as f:
+            with open(TERABOX_COOKIE_FILE, 'w', encoding='utf-8') as f:
                 f.write(cookie_val)
             return jsonify({'success': True, 'message': 'Cookie đã lưu thành công'})
         except Exception as e:
@@ -1361,7 +1372,7 @@ def terabox_cookie():
     else:
         if os.path.exists(TERABOX_COOKIE_FILE):
             try:
-                with open(TERABOX_COOKIE_FILE, 'r') as f:
+                with open(TERABOX_COOKIE_FILE, 'r', encoding='utf-8') as f:
                     val = f.read().strip()
                 if val:
                     # Mask cookie for display
@@ -1415,7 +1426,7 @@ def _load_fshare_config(include_secret=True):
     }
     if os.path.exists(FSHARE_CONFIG_FILE):
         try:
-            with open(FSHARE_CONFIG_FILE, 'r') as f:
+            with open(FSHARE_CONFIG_FILE, 'r', encoding='utf-8') as f:
                 saved = json.load(f)
             for key in config:
                 if saved.get(key):
@@ -1440,8 +1451,8 @@ def _save_fshare_config(data):
             if key == 'password' and val == '__KEEP__':
                 continue
             current[key] = val
-    with open(FSHARE_CONFIG_FILE, 'w') as f:
-        json.dump(current, f)
+    with open(FSHARE_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False)
     return current
 
 
@@ -1715,7 +1726,7 @@ def _load_fichier_config(include_secret=True):
     }
     if os.path.exists(FICHIER_CONFIG_FILE):
         try:
-            with open(FICHIER_CONFIG_FILE, 'r') as f:
+            with open(FICHIER_CONFIG_FILE, 'r', encoding='utf-8') as f:
                 saved = json.load(f)
             if saved.get('api_key'):
                 config['api_key'] = saved.get('api_key')
@@ -1738,8 +1749,8 @@ def _save_fichier_config(data):
             pass
         else:
             current['api_key'] = val
-    with open(FICHIER_CONFIG_FILE, 'w') as f:
-        json.dump(current, f)
+    with open(FICHIER_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False)
     return current
 
 
@@ -1772,7 +1783,7 @@ def _load_github_config():
     config = {'github_pat': '', 'github_repo': ''}
     if os.path.exists(GITHUB_CONFIG_FILE):
         try:
-            with open(GITHUB_CONFIG_FILE, 'r') as f:
+            with open(GITHUB_CONFIG_FILE, 'r', encoding='utf-8') as f:
                 saved = json.load(f)
                 config['github_pat'] = saved.get('github_pat', '')
                 config['github_repo'] = saved.get('github_repo', '')
@@ -1790,8 +1801,8 @@ def _save_github_config(data):
     if repo:
         current['github_repo'] = repo
         
-    with open(GITHUB_CONFIG_FILE, 'w') as f:
-        json.dump(current, f)
+    with open(GITHUB_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False)
     return current
 
 @app.route('/api/github/config', methods=['GET', 'POST'])
