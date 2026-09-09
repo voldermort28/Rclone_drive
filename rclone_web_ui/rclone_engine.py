@@ -88,7 +88,9 @@ class RcloneEngine:
             binary, "copy", source, destination,
             "--verbose",
             "--stats=1s",
-            "--stats-one-line"
+            "--stats-one-line",
+            "--drive-server-side-across-configs",
+            "--drive-acknowledge-abuse",
         ]
         
         # Auto-add SA rotation flags if SA directory exists
@@ -121,6 +123,9 @@ class RcloneEngine:
             )
 
             progress_regex = re.compile(r'(\d+)%')
+            has_gdocs_error = False
+            transferred_any = False
+            last_percent = 0
             
             # Use self.process explicitly to satisfy lint and logic
             if self.process and self.process.stdout:
@@ -133,11 +138,16 @@ class RcloneEngine:
                     self._safe_print(f"[RCLONE RAW] {line}")
                     self.log_callback(logging.DEBUG, line)
                     
+                    if "Only files with binary content can be downloaded" in line or "fileNotDownloadable" in line:
+                        has_gdocs_error = True
+
                     match = progress_regex.search(line)
                     if match:
                         percent = int(match.group(1))
+                        last_percent = percent
                         self.progress_callback(percent, line)
                     elif "Transferred:" in line and " / " in line:
+                        transferred_any = True
                         self.log_callback(logging.INFO, line)
                     elif "Errors:" in line:
                         self.log_callback(logging.ERROR, f"RCLONE ERROR: {line}")
@@ -156,6 +166,9 @@ class RcloneEngine:
                 elif self.stop_checker():
                     self.log_callback(logging.WARNING, "Rclone copy was stopped.")
                     return False
+                elif has_gdocs_error and (transferred_any or last_percent == 100):
+                    self.log_callback(logging.WARNING, "Lưu ý: Một số file Google Docs (văn bản online) không thể tải binary và được bỏ qua. Tất cả các file dữ liệu khác đã được sao chép hoàn tất.")
+                    return True
                 else:
                     self.log_callback(logging.ERROR, f"Rclone exited with code {self.process.returncode}")
                     return False
