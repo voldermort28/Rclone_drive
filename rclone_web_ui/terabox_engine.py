@@ -408,14 +408,16 @@ class TeraboxEngine:
                 if m:
                     surl = m.group(1)
 
-            candidates = [full_url]
+            candidates = []
             if surl:
                 candidates.extend([
                     "https://www.terabox.app/s/1" + surl,
+                    "https://www.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
                     "https://www.terabox.com/sharing/link?surl=" + surl + "&clearCache=1",
-                    "https://1024tera.com/s/1" + surl,
                     "https://dm.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
                 ])
+            if full_url and full_url not in candidates:
+                candidates.append(full_url)
 
             js_token = ""
             bdstoken = ""
@@ -430,7 +432,7 @@ class TeraboxEngine:
 
             for cand_url in candidates:
                 try:
-                    r = session.get(cand_url, timeout=20)
+                    r = session.get(cand_url, timeout=10)
                     if not r.ok:
                         continue
                     html = r.text

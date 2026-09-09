@@ -2934,7 +2934,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         var lines = rawUrl.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
         var url = lines[0] || '';
 
-        var isTerabox = !/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(url);
+        var isTerabox = !/terabox|1024tera|nephobox|4funbox|mirrobox|momerybox|tibibox|tibabox|freeterabox|terasharelink|teraboxlink|teraboxshare|dubox|momotera|miyauplat|funletu|ytbterabox/i.test(url);
         if (isTerabox) {
             alert('Dòng đầu tiên không phải link Terabox. Cần link dạng: https://www.terabox.app/s/...');
             return;
@@ -2983,7 +2983,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (lines.length === 0) { alert('Vui lòng nhập link Terabox!'); return; }
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
-            if (!/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(line)) {
+            if (!/terabox|1024tera|nephobox|4funbox|mirrobox|momerybox|tibibox|tibabox|freeterabox|terasharelink|teraboxlink|teraboxshare|dubox|momotera|miyauplat|funletu|ytbterabox/i.test(line)) {
                 alert('Dòng ' + (i + 1) + ' không phải link Terabox hợp lệ!');
                 return;
             }
@@ -3262,7 +3262,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (lines.length === 0) { alert('Vui lòng nhập link Terabox!'); return; }
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
-            if (!/terabox|1024tera|nephobox|dubox|momotera|miyauplat|funletu|tibabox|ytbterabox/i.test(line)) {
+            if (!/terabox|1024tera|nephobox|4funbox|mirrobox|momerybox|tibibox|tibabox|freeterabox|terasharelink|teraboxlink|teraboxshare|dubox|momotera|miyauplat|funletu|ytbterabox/i.test(line)) {
                 alert('Dòng ' + (i + 1) + ' không phải link Terabox hợp lệ!');
                 return;
             }

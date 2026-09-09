@@ -135,7 +135,11 @@ def detect_url_type(url):
         return 'fshare'
     if 'mega.nz' in url_lower:
         return 'mega'
-    if any(k in url_lower for k in ['terabox', '1024tera', 'nephobox', '4funbox', 'mirrobox', 'momerybox', 'tibibox', 'freeterabox']):
+    if any(k in url_lower for k in [
+        'terabox', '1024tera', 'nephobox', '4funbox', 'mirrobox', 'momerybox',
+        'tibibox', 'tibabox', 'freeterabox', 'terasharelink', 'teraboxlink',
+        'teraboxshare', 'dubox', 'momotera', 'miyauplat', 'funletu', 'ytbterabox'
+    ]):
         return 'terabox'
     if any(dom in url_lower for dom in ['1fichier.com', '1fichier.fr', '1fichier.co', '1fichier.org', '1fichier.net']):
         return '1fichier'
