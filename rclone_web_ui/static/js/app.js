@@ -67,6 +67,7 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
             loadFshareConfig();
             loadGithubConfig();
             loadFichierConfig();
+            loadPixeldrainConfig();
         } else if (tabName === 'unpack') {
             loadGithubConfig();
             checkUnpackStatus();
@@ -606,6 +607,33 @@ function checkConfigStatus() {
         .catch(() => {
             const indicator = document.getElementById('badgeFichierIndicator');
             const text = document.getElementById('badgeFichierText');
+            if (indicator && text) {
+                indicator.className = 'badge-indicator inactive';
+                indicator.style.backgroundColor = '';
+                text.textContent = 'Lỗi kết nối';
+            }
+        });
+
+    fetch('/api/pixeldrain/config')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('badgePixeldrainIndicator');
+            const text = document.getElementById('badgePixeldrainText');
+            if (indicator && text) {
+                if (data.complete) {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '';
+                    text.textContent = 'Pro (API Key)';
+                } else {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '#10b981';
+                    text.textContent = 'Tự động (Free)';
+                }
+            }
+        })
+        .catch(() => {
+            const indicator = document.getElementById('badgePixeldrainIndicator');
+            const text = document.getElementById('badgePixeldrainText');
             if (indicator && text) {
                 indicator.className = 'badge-indicator inactive';
                 indicator.style.backgroundColor = '';
@@ -2420,6 +2448,108 @@ var saveFichierConfigBtn = document.getElementById('saveFichierConfigBtn');
 if (loadFichierConfigBtn) loadFichierConfigBtn.addEventListener('click', loadFichierConfig);
 if (clearFichierConfigBtn) clearFichierConfigBtn.addEventListener('click', clearFichierConfig);
 if (saveFichierConfigBtn) saveFichierConfigBtn.addEventListener('click', saveFichierConfig);
+
+// ==================== PIXELDRAIN CONFIG ====================
+function loadPixeldrainConfig() {
+    var apiKey = document.getElementById('pixeldrainApiKey');
+    var status = document.getElementById('pixeldrainConfigStatus');
+    if (!apiKey || !status) return;
+
+    status.textContent = 'Đang tải cấu hình Pixeldrain...';
+    status.className = 'config-status';
+
+    fetch('/api/pixeldrain/config')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            apiKey.value = '';
+            status.textContent = data.complete
+                ? '✅ Pixeldrain đã cấu hình (API Key: ' + data.api_key_masked + ')'
+                : 'ℹ️ Chưa cấu hình API Key. Hệ thống sẽ dùng chế độ Tự động (Free).';
+            status.className = data.complete ? 'config-status success' : 'config-status';
+            checkConfigStatus();
+        })
+        .catch(function () {
+            status.textContent = '❌ Không tải được cấu hình Pixeldrain';
+            status.className = 'config-status error';
+        });
+}
+
+function savePixeldrainConfig() {
+    var apiKey = document.getElementById('pixeldrainApiKey');
+    var status = document.getElementById('pixeldrainConfigStatus');
+    if (!apiKey || !status) return;
+
+    status.textContent = 'Đang lưu Pixeldrain...';
+    status.className = 'config-status';
+
+    var payload = {
+        api_key: apiKey.value.trim() || '__KEEP__'
+    };
+
+    fetch('/api/pixeldrain/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = data.complete ? '✅ Đã lưu API Key Pixeldrain!' : 'ℹ️ Đã xóa API Key, chuyển sang chế độ Tự động (Free).';
+                status.className = data.complete ? 'config-status success' : 'config-status';
+                apiKey.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi lưu Pixeldrain');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+function clearPixeldrainConfig() {
+    var apiKey = document.getElementById('pixeldrainApiKey');
+    var status = document.getElementById('pixeldrainConfigStatus');
+    if (!apiKey || !status) return;
+
+    if (!confirm('Bạn có chắc chắn muốn xóa API Key Pixeldrain và chuyển về chế độ Tự động (Free)?')) {
+        return;
+    }
+
+    status.textContent = 'Đang xóa API Key Pixeldrain...';
+    status.className = 'config-status';
+
+    fetch('/api/pixeldrain/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: '' })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = 'ℹ️ Đã xóa API Key, chuyển sang chế độ Tự động (Free).';
+                status.className = 'config-status success';
+                apiKey.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi xóa API Key');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+var loadPixeldrainConfigBtn = document.getElementById('loadPixeldrainConfigBtn');
+var clearPixeldrainConfigBtn = document.getElementById('clearPixeldrainConfigBtn');
+var savePixeldrainConfigBtn = document.getElementById('savePixeldrainConfigBtn');
+if (loadPixeldrainConfigBtn) loadPixeldrainConfigBtn.addEventListener('click', loadPixeldrainConfig);
+if (clearPixeldrainConfigBtn) clearPixeldrainConfigBtn.addEventListener('click', clearPixeldrainConfig);
+if (savePixeldrainConfigBtn) savePixeldrainConfigBtn.addEventListener('click', savePixeldrainConfig);
 
 // ==================== SA MANAGEMENT ====================
 var saUploadArea = document.getElementById('saUploadArea');

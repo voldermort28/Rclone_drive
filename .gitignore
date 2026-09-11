@@ -24,6 +24,8 @@ rclone_web_ui/queue.json
 rclone_web_ui/dest_history.json
 rclone_web_ui/fshare_config.json
 rclone_web_ui/terabox_cookie.txt
+rclone_web_ui/fichier_config.json
+rclone_web_ui/pixeldrain_config.json
 rclone_web_ui/.brain/
 .brain/
 .gemini/

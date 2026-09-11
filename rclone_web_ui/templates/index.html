@@ -85,12 +85,16 @@
                         <span class="badge-indicator" id="badgeFichierIndicator"></span>
                         <span>1fichier: <strong id="badgeFichierText">Kiểm tra...</strong></span>
                     </div>
+                    <div class="badge-status-box">
+                        <span class="badge-indicator" id="badgePixeldrainIndicator"></span>
+                        <span>Pixeldrain: <strong id="badgePixeldrainText">Kiểm tra...</strong></span>
+                    </div>
                 </div>
 
                 <div class="input-group">
-                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire, 1fichier...)</label>
+                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire, 1fichier, Pixeldrain...)</label>
                     <textarea id="url" rows="5"
-                        placeholder="Paste link nguồn ở đây (mỗi dòng 1 link)...&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY&#10;VD 1fichier: https://1fichier.com/?abcdef123"
+                        placeholder="Paste link nguồn ở đây (mỗi dòng 1 link)...&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY&#10;VD 1fichier: https://1fichier.com/?abcdef123&#10;VD Pixeldrain: https://pixeldrain.com/u/ABCXYZ"
                         autocomplete="off"></textarea>
                     <div style="margin-top: 8px;">
                         <label
@@ -379,6 +383,26 @@
                     </button>
                 </div>
                 <div id="fichierConfigStatus" class="config-status"></div>
+            </section>
+
+            <!-- Pixeldrain API Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;" id="pixeldrainConfigSection">
+                <div class="config-header">
+                    <h3>⚡ API Key Pixeldrain</h3>
+                    <p class="config-desc">Cấu hình API Key Pixeldrain (tùy chọn). Đối với link công khai, bạn không cần API Key. Nếu bạn có tài khoản Pixeldrain Pro/API Key, hãy nhập để tải file riêng tư hoặc dùng quota tài khoản.</p>
+                </div>
+                <div class="input-group">
+                    <label for="pixeldrainApiKey">API Key Pixeldrain (Tùy chọn)</label>
+                    <input type="password" id="pixeldrainApiKey" placeholder="Nhập API Key Pixeldrain ở đây (nếu có)..." autocomplete="new-password">
+                </div>
+                <div class="config-actions">
+                    <button id="loadPixeldrainConfigBtn" class="btn-secondary">Tải lại Pixeldrain</button>
+                    <button id="clearPixeldrainConfigBtn" class="btn-secondary" style="border-color: #ef4444; color: #ef4444;">❌ Xóa API Key</button>
+                    <button id="savePixeldrainConfigBtn" class="btn-primary">
+                        <span class="btn-text">💾 Lưu Pixeldrain</span>
+                    </button>
+                </div>
+                <div id="pixeldrainConfigStatus" class="config-status"></div>
             </section>
 
             <!-- GitHub Actions Config Section -->

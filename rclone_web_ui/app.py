@@ -143,6 +143,8 @@ def detect_url_type(url):
         return 'terabox'
     if any(dom in url_lower for dom in ['1fichier.com', '1fichier.fr', '1fichier.co', '1fichier.org', '1fichier.net']):
         return '1fichier'
+    if 'pixeldrain.com' in url_lower:
+        return 'pixeldrain'
     return 'rclone'
 
 # ==================== BACKGROUND WORKER ====================
@@ -656,6 +658,75 @@ def run_real_fichier_job(job):
     return False
 
 
+def run_real_pixeldrain_job(job):
+    global download_state, _pixeldrain_engine
+    from pixeldrain_engine import PixeldrainEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo Pixeldrain...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'pixeldrain'
+    })
+    
+    pixeldrain_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo Pixeldrain...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    _pixeldrain_engine = PixeldrainEngine(_pixeldrain_progress, _pixeldrain_log, _pixeldrain_stop_checker, _pixeldrain_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        config = _load_pixeldrain_config(include_secret=True)
+        success = _pixeldrain_engine.run_full_pipeline(job['urls'], config, job['dest'])
+        if _pixeldrain_stop_checker():
+            pixeldrain_state['status'] = 'stopped'
+            pixeldrain_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng Pixeldrain job.'
+        elif success:
+            pixeldrain_state['status'] = 'done'
+            pixeldrain_state['phase'] = 'done'
+            pixeldrain_state['message'] = 'Hoàn tất! File từ Pixeldrain đã được copy lên Google Drive.'
+            pixeldrain_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            pixeldrain_state['status'] = 'error'
+            pixeldrain_state['phase'] = 'error'
+            if not pixeldrain_state['message']:
+                pixeldrain_state['message'] = 'Tải từ Pixeldrain thất bại.'
+            download_state['status'] = 'error'
+            download_state['message'] = pixeldrain_state['message']
+    except Exception as e:
+        pixeldrain_state['status'] = 'error'
+        pixeldrain_state['phase'] = 'error'
+        pixeldrain_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+
 def queue_worker_loop():
     global download_state
     while True:
@@ -689,6 +760,8 @@ def queue_worker_loop():
                 quota_hit = run_real_mega_job(job_to_run)
             elif job_type == '1fichier':
                 quota_hit = run_real_fichier_job(job_to_run)
+            elif job_type == 'pixeldrain':
+                quota_hit = run_real_pixeldrain_job(job_to_run)
             else:
                 quota_hit = False
             
@@ -736,7 +809,7 @@ worker_thread.start()
 
 @app.route('/api/stop', methods=['POST'])
 def stop_download():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine
     if download_state['status'] in ['downloading', 'initializing']:
         stop_event.set()
         
@@ -775,12 +848,19 @@ def stop_download():
             except:
                 pass
                 
+        pixeldrain_state['stop_flag'] = True
+        if _pixeldrain_engine:
+            try:
+                _pixeldrain_engine.stop()
+            except:
+                pass
+                
         return jsonify({'message': 'Stopping process...'})
     return jsonify({'message': 'No process running'})
 
 @app.route('/api/clear_temp', methods=['POST'])
 def clear_temp():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine
     # 1. Stop any currently running task
     stop_event.set()
     terabox_state['stop_flag'] = True
@@ -808,6 +888,11 @@ def clear_temp():
         try: _fichier_engine.stop()
         except: pass
         
+    pixeldrain_state['stop_flag'] = True
+    if _pixeldrain_engine:
+        try: _pixeldrain_engine.stop()
+        except: pass
+        
     # 2. Delete all temp folders
     deleted_paths = []
     for path, name in [
@@ -815,7 +900,8 @@ def clear_temp():
         (FSHARE_TMP_ROOT, 'Fshare'),
         (MEDIAFIRE_TMP_ROOT, 'MediaFire'),
         (MEGA_TMP_ROOT, 'Mega'),
-        (FICHIER_TMP_ROOT, '1fichier')
+        (FICHIER_TMP_ROOT, '1fichier'),
+        (PIXELDRAIN_TMP_ROOT, 'Pixeldrain')
     ]:
         if os.path.exists(path):
             try:
@@ -830,6 +916,7 @@ def clear_temp():
     _reset_mediafire_state()
     _reset_mega_state()
     _reset_fichier_state()
+    _reset_pixeldrain_state()
     
     # 4. Clear queue
     try:
@@ -1769,6 +1856,120 @@ def fichier_config():
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
     return jsonify(_load_fichier_config(include_secret=False))
+
+
+# ==================== PIXELDRAIN MODULE ====================
+from pixeldrain_engine import PixeldrainEngine
+
+PIXELDRAIN_CONFIG_FILE = os.path.join(BASE_DIR, 'pixeldrain_config.json')
+PIXELDRAIN_TMP_ROOT = '/tmp/pixeldrain_dl'
+
+pixeldrain_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
+}
+_pixeldrain_engine = None
+
+
+def _reset_pixeldrain_state():
+    pixeldrain_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+
+def _pixeldrain_progress(percent, message):
+    pixeldrain_state['progress'] = percent
+    pixeldrain_state['message'] = message
+    sync_tool_progress_to_queue('pixeldrain', percent, message)
+
+
+def _pixeldrain_state_update(values):
+    for key, value in values.items():
+        if key in pixeldrain_state:
+            pixeldrain_state[key] = value
+    sync_tool_state_update_to_queue('pixeldrain', values)
+
+
+def _pixeldrain_log(level, message):
+    pixeldrain_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(pixeldrain_state['logs']) > 200:
+        pixeldrain_state['logs'] = pixeldrain_state['logs'][-200:]
+    logging.log(level, "[PIXELDRAIN] %s", message)
+    sync_tool_log_to_queue('pixeldrain', level, message)
+
+
+def _pixeldrain_stop_checker():
+    return pixeldrain_state.get('stop_flag', False)
+
+
+def _load_pixeldrain_config(include_secret=True):
+    config = {
+        'api_key': os.environ.get('PIXELDRAIN_API_KEY', '')
+    }
+    if os.path.exists(PIXELDRAIN_CONFIG_FILE):
+        try:
+            with open(PIXELDRAIN_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            if saved.get('api_key'):
+                config['api_key'] = saved.get('api_key')
+        except Exception:
+            pass
+    if not include_secret:
+        return {
+            'has_api_key': bool(config.get('api_key')),
+            'api_key_masked': _mask_secret(config.get('api_key', '')),
+            'complete': bool(config.get('api_key'))
+        }
+    return config
+
+
+def _save_pixeldrain_config(data):
+    current = _load_pixeldrain_config(include_secret=True)
+    if 'api_key' in data:
+        val = (data.get('api_key') or '').strip()
+        if val == '__KEEP__':
+            pass
+        else:
+            current['api_key'] = val
+    with open(PIXELDRAIN_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False)
+    return current
+
+
+@app.route('/api/pixeldrain/config', methods=['GET', 'POST'])
+def pixeldrain_config():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            config = _save_pixeldrain_config(data)
+            complete = bool(config.get('api_key'))
+            return jsonify({'success': True, 'complete': complete, 'message': 'Đã lưu cấu hình Pixeldrain'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify(_load_pixeldrain_config(include_secret=False))
 
 
 # ==================== CLOUD UNPACK MODULE ====================
