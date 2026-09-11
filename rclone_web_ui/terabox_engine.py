@@ -1078,6 +1078,13 @@ class TeraboxEngine:
                 # Step 2: Check VPS complete file
                 resume_key = hashlib.sha1("{0}_{1}".format(item.get("surl", ""), item.get("fs_id") or display_name).encode('utf-8')).hexdigest()[:24]
                 item_tmp_dir = os.path.join('/tmp', 'terabox_dl', resume_key)
+                try:
+                    from pending_manager import save_pending_meta
+                    item_url = item.get('url') or (('https://www.1024terabox.com/s/1' + item.get('surl')) if item.get('surl') else raw_urls)
+                    save_pending_meta(item_tmp_dir, url=item_url, file_name=display_name,
+                                      file_size=item_size, dest=drive_dest, engine='terabox')
+                except Exception:
+                    pass
                 local_path = self._find_completed_in_dir(item_tmp_dir, item_size, display_name)
 
                 if local_path:

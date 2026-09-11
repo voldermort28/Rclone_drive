@@ -1,5 +1,5 @@
 # Phase 03: Kiểm thử hồi quy & Triển khai an toàn
-Status: 🟡 In Progress
+Status: ✅ Complete
 Dependencies: [Phase 02](phase-02-direct-extraction.md)
 
 ## Mục tiêu
@@ -36,6 +36,6 @@ Kiểm thử toàn diện luồng giải nén mới để đảm bảo tính ổ
 ---
 
 ## Tiêu chí hoàn thành (Definition of Done)
-- [ ] Tất cả 4 kịch bản kiểm thử trên đều đạt kết quả tốt.
-- [ ] Logic cũ không bị ảnh hưởng, không phát sinh lỗi trên giao diện Web UI hiện tại.
-- [ ] Không rò rỉ (leak) mountpoint trên runner (lệnh `umount` chạy sạch sẽ ở bước cuối).
+- [x] Tất cả 4 kịch bản kiểm thử trên đều đạt kết quả tốt.
+- [x] Logic cũ không bị ảnh hưởng, không phát sinh lỗi trên giao diện Web UI hiện tại.
+- [x] Không rò rỉ (leak) mountpoint trên runner (lệnh `umount` chạy sạch sẽ ở bước cuối).

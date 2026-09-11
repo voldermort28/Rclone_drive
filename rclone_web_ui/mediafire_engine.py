@@ -786,6 +786,12 @@ class MediaFireEngine:
 
                 # Step 2: Check VPS complete file
                 item_tmp_dir = self._resume_dir_for_url(item.get('url') or display_name)
+                try:
+                    from pending_manager import save_pending_meta
+                    save_pending_meta(item_tmp_dir, url=item.get('url') or '', file_name=display_name,
+                                      file_size=item_size, dest=drive_dest, engine='mediafire')
+                except Exception:
+                    pass
                 local_path = self._find_completed_in_dir(item_tmp_dir, item_size)
                 if local_path:
                     self.log_callback(logging.INFO,

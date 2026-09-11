@@ -74,6 +74,8 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
         } else if (tabName === 'history') {
             loadQueue();
             loadHistory();
+        } else if (tabName === 'pending') {
+            loadPendingList();
         }
     });
 });
@@ -2632,6 +2634,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     loadSAInfo();
     checkActiveTransfer();
+    loadPendingBadge();
 });
 
 async function checkActiveTransfer() {
@@ -2729,6 +2732,213 @@ document.getElementById('clearHistoryBtn').addEventListener('click', function ()
     };
     xhr.send();
 });
+
+// ==================== PENDING FILES MANAGEMENT ====================
+function loadPendingBadge() {
+    fetch('/api/pending/list')
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            var badge = document.getElementById('pendingBadge');
+            if (badge) {
+                var count = (data && data.count) || 0;
+                if (count > 0) {
+                    badge.textContent = count;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        })
+        .catch(function () {});
+}
+
+function loadPendingList() {
+    var tbody = document.getElementById('pendingListBody');
+    if (tbody && (!tbody.children.length || tbody.children[0].innerText.indexOf('Đang') !== -1)) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 25px; color: var(--text-muted);">Đang tải danh sách file tạm...</td></tr>';
+    }
+
+    fetch('/api/pending/list')
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            renderPendingList(data);
+        })
+        .catch(function (err) {
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #ef4444; padding: 25px;">Lỗi khi tải danh sách: ' + (err.message || err) + '</td></tr>';
+            }
+        });
+}
+
+function renderPendingList(data) {
+    var tbody = document.getElementById('pendingListBody');
+    var countDisplay = document.getElementById('pendingCountDisplay');
+    var wasteDisplay = document.getElementById('pendingWasteDisplay');
+    var badge = document.getElementById('pendingBadge');
+
+    var count = (data && data.count) || 0;
+    var totalHuman = (data && data.total_size_human) || '0 B';
+    var items = (data && data.items) || [];
+
+    if (countDisplay) countDisplay.textContent = count;
+    if (wasteDisplay) wasteDisplay.textContent = totalHuman;
+
+    if (badge) {
+        if (count > 0) {
+            badge.textContent = count;
+            badge.style.display = 'inline-block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+
+    if (!tbody) return;
+
+    if (!items || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 30px; color: var(--text-muted); font-size: 0.95rem;">🎉 Tuyệt vời! Không có file tạm hoặc download dở dang nào trên hệ thống.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    items.forEach(function (item) {
+        var tr = document.createElement('tr');
+
+        // Engine badge
+        var engColors = {
+            'fshare': '#dc2626',
+            'terabox': '#2563eb',
+            'mediafire': '#0284c7',
+            'mega': '#ea580c',
+            'fichier': '#7c3aed',
+            'pixeldrain': '#059669'
+        };
+        var engColor = engColors[item.engine] || '#64748b';
+        var engineBadge = '<span class="status-badge" style="background-color: ' + engColor + '; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 4px;">' +
+            (item.engine_display || item.engine || 'Unknown') + '</span>';
+
+        // URL / Name display
+        var nameSafe = (item.name || item.folder_key || 'N/A').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var nameHtml = '<div style="font-weight: 600; color: var(--text-color); margin-bottom: 4px; word-break: break-all;">' + nameSafe + '</div>';
+        if (item.url) {
+            var urlSafe = item.url.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            nameHtml += '<div style="font-size: 11px; color: var(--text-muted); word-break: break-all;">' +
+                '<a href="' + encodeURI(item.url) + '" target="_blank" rel="noopener noreferrer" style="color: #38bdf8; text-decoration: underline;">' + urlSafe + '</a>' +
+                '</div>';
+        } else {
+            nameHtml += '<div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">Hash: ' + (item.folder_key || item.path) + '</div>';
+        }
+
+        // Status badge
+        var statusBadge = '';
+        if (item.is_active) {
+            statusBadge = '<span class="status-badge" style="background-color: #3b82f6; color: white;">⚡ Đang tải (Active)</span>';
+        } else if (item.status === 'incomplete') {
+            statusBadge = '<span class="status-badge" style="background-color: #f59e0b; color: #1e293b; font-weight: 600;">⚠️ Tải dở dang (.part)</span>';
+        } else if (item.status === 'completed_unuploaded') {
+            statusBadge = '<span class="status-badge" style="background-color: #8b5cf6; color: white;">📦 Chưa upload</span>';
+        } else {
+            statusBadge = '<span class="status-badge" style="background-color: #64748b; color: white;">' + (item.status_display || item.status) + '</span>';
+        }
+
+        // Action button
+        var actionBtn = '';
+        if (item.is_active) {
+            actionBtn = '<span style="font-size: 11px; color: var(--text-muted);">Đang chạy</span>';
+        } else {
+            actionBtn = '<button class="btn-secondary btn-delete-pending" style="padding: 4px 8px; border: 1px solid #ef4444; color: #ef4444; border-radius: 4px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;" title="Xóa thư mục tạm này">' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+                '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>' +
+                '</svg> Xóa</button>';
+        }
+
+        tr.innerHTML =
+            '<td>' + engineBadge + '</td>' +
+            '<td style="max-width: 450px;">' + nameHtml + '</td>' +
+            '<td style="font-weight: 600; color: #f59e0b;">' + (item.size_human || '0 B') + '</td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td style="font-size: 12px; color: var(--text-muted);">' + (item.modified_at || 'N/A') + '</td>' +
+            '<td style="text-align: center;">' + actionBtn + '</td>';
+
+        var btn = tr.querySelector('.btn-delete-pending');
+        if (btn) {
+            btn.addEventListener('click', function () {
+                deletePendingItem(item.path, item.name || item.folder_key);
+            });
+        }
+
+        tbody.appendChild(tr);
+    });
+}
+
+function deletePendingItem(path, displayName) {
+    if (!confirm('Bạn có chắc muốn xóa file tạm này?\n\n' + (displayName || path))) {
+        return;
+    }
+
+    fetch('/api/pending/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path })
+    })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            if (data.success) {
+                loadPendingList();
+            } else {
+                alert('Lỗi: ' + (data.error || 'Không thể xóa'));
+            }
+        })
+        .catch(function (err) {
+            alert('Lỗi kết nối: ' + err.message);
+        });
+}
+
+function clearAllPending() {
+    if (!confirm('Bạn có chắc muốn XÓA TẤT CẢ các file tạm / download dở dang trên hệ thống không?\n\nThao tác này sẽ dọn sạch các thư mục /tmp/*_dl và giải phóng dung lượng ổ cứng!')) {
+        return;
+    }
+
+    var tbody = document.getElementById('pendingListBody');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 25px; color: var(--text-muted);">Đang dọn sạch tất cả file tạm...</td></tr>';
+    }
+
+    fetch('/api/pending/clear_all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            if (data.success) {
+                alert('Đã dọn dẹp thành công!\n- Số mục đã xóa: ' + (data.deleted_count || 0) + '\n- Dung lượng giải phóng: ' + (data.freed_human || '0 B'));
+                loadPendingList();
+            } else {
+                alert('Lỗi: ' + (data.error || 'Không thể dọn dẹp'));
+                loadPendingList();
+            }
+        })
+        .catch(function (err) {
+            alert('Lỗi kết nối: ' + err.message);
+            loadPendingList();
+        });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    var refreshPendingBtn = document.getElementById('refreshPendingBtn');
+    if (refreshPendingBtn) {
+        refreshPendingBtn.addEventListener('click', function () {
+            loadPendingList();
+        });
+    }
+
+    var clearAllPendingBtn = document.getElementById('clearAllPendingBtn');
+    if (clearAllPendingBtn) {
+        clearAllPendingBtn.addEventListener('click', function () {
+            clearAllPending();
+        });
+    }
+});
+
 
 // Save inputs on change
 urlInput.addEventListener('input', () => {

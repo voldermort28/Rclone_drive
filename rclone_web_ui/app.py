@@ -2182,5 +2182,33 @@ def cloud_unpack_reset():
     return jsonify({'success': True})
 
 
+# ==================== PENDING / TEMP FILES MANAGEMENT ====================
+import pending_manager
+
+@app.route('/api/pending/list', methods=['GET'])
+def pending_list():
+    active_job = download_state if download_state.get('status') in ('downloading', 'uploading') else None
+    data = pending_manager.list_pending_items(active_job=active_job, base_dir=BASE_DIR)
+    return jsonify(data)
+
+
+@app.route('/api/pending/delete', methods=['POST'])
+def pending_delete():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get('path', '').strip()
+    if not path:
+        return jsonify({'success': False, 'error': 'Thiếu đường dẫn cần xóa.'}), 400
+    active_job = download_state if download_state.get('status') in ('downloading', 'uploading') else None
+    res = pending_manager.delete_pending_item(path, active_job=active_job)
+    return jsonify(res)
+
+
+@app.route('/api/pending/clear_all', methods=['POST'])
+def pending_clear_all():
+    active_job = download_state if download_state.get('status') in ('downloading', 'uploading') else None
+    res = pending_manager.clear_all_pending(active_job=active_job, base_dir=BASE_DIR)
+    return jsonify(res)
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, threaded=True)

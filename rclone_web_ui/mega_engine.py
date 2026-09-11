@@ -668,6 +668,13 @@ class MegaEngine:
                     tmp_dir = os.path.join('/tmp', 'mega_dl')
                 local_path = os.path.join(tmp_dir, fname)
 
+                try:
+                    from pending_manager import save_pending_meta
+                    save_pending_meta(tmp_dir, url=mega_url, file_name=fname,
+                                      file_size=fsize, dest=drive_dest, engine='mega')
+                except Exception:
+                    pass
+
                 # Step 2b: Check if file already fully downloaded on VPS
                 local_path_io = self._path_for_io(local_path)
                 skip_dl = False

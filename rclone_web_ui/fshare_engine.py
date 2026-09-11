@@ -507,6 +507,14 @@ class FshareEngine:
                 if self.stop_checker() or self._stopped:
                     return False
 
+                # Save pending metadata
+                try:
+                    from pending_manager import save_pending_meta
+                    save_pending_meta(tmp_dir, url=single_url, file_name=file_name,
+                                      file_size=file_size, dest=drive_dest, engine='fshare')
+                except Exception:
+                    pass
+
                 # Step 2: Check VPS complete file
                 local_path = self._find_completed_in_dir(tmp_dir, file_size)
                 if local_path:

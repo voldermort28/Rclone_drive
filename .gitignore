@@ -31,3 +31,5 @@ rclone_web_ui/.brain/
 .gemini/
 brain/
 *.heapsnapshot
+.playwright-mcp/
+

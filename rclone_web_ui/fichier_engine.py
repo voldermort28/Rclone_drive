@@ -605,6 +605,12 @@ class FichierEngine:
 
             # Check VPS completed file
             tmp_dir = self._resume_dir_for_url(url)
+            try:
+                from pending_manager import save_pending_meta
+                save_pending_meta(tmp_dir, url=url, file_name=file_name,
+                                  file_size=file_size, dest=drive_dest, engine='fichier')
+            except Exception:
+                pass
             completed = None
             try:
                 tmp_io = self._path_for_io(tmp_dir)
