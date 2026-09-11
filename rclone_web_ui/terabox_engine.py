@@ -333,6 +333,7 @@ class TeraboxEngine:
             try:
                 r_sub = session.get(list_url, params=folder_params, timeout=30)
                 sub_data = r_sub.json()
+                time.sleep(0.4)
             except Exception as e:
                 self.log_callback(logging.WARNING, "Lỗi quét thư mục {0}: {1}".format(current_dir, str(e)))
                 break
@@ -429,6 +430,7 @@ class TeraboxEngine:
             logid = ""
             api_base = "https://www.terabox.app"
             referer_url = full_url
+            need_verify = False
 
             for cand_url in candidates:
                 try:
@@ -436,6 +438,8 @@ class TeraboxEngine:
                     if not r.ok:
                         continue
                     html = r.text
+                    if 'need verify' in html or '400141' in html:
+                        need_verify = True
                     decoded_html = unquote(html)
                     combined_html = html + "\n" + decoded_html
 
@@ -485,6 +489,8 @@ class TeraboxEngine:
                 return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
 
             if not js_token:
+                if need_verify:
+                    return {"error": "Terabox chặn IP và yêu cầu xác minh Captcha (errno 400141: 'need verify'). Terabox WAF đang chặn IP VPS tạm thời do quét nhiều file. Vui lòng thử lại sau vài giờ hoặc lưu file vào Terabox cá nhân."}
                 return {"error": "Không lấy được jsToken. Cookie 'ndus' có thể đã hết hạn hoặc Terabox chặn IP."}
 
             self.log_callback(logging.INFO, "Đã lấy được jsToken. Đang lấy danh sách file...")
