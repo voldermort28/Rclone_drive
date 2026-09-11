@@ -39,7 +39,7 @@ SA_DIR = os.path.join(BASE_DIR, 'sa')
 HISTORY_FILE = os.path.join(BASE_DIR, 'history.json')
 QUEUE_FILE = os.path.join(BASE_DIR, 'queue.json')
 DEST_HISTORY_FILE = os.path.join(BASE_DIR, 'dest_history.json')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Pokemon@2808')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '28081988')
 RCLONE_CONF_PATHS = [
     os.path.expanduser('~/.config/rclone/rclone.conf'),
     '/root/.config/rclone/rclone.conf',
