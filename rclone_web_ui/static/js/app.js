@@ -1926,6 +1926,11 @@ function updateUI(state) {
         stopBtn.style.display = 'none';
         stopBtn.disabled = false;
         stopBtn.querySelector('.btn-text').textContent = 'Dừng tiến trình đang chạy';
+    } else if (state.status === 'waiting_cookie' || state.status === 'waiting_ip') {
+        statusText.style.color = '#f59e0b';
+        stopBtn.style.display = 'block';
+        stopBtn.disabled = false;
+        stopBtn.querySelector('.btn-text').textContent = 'Dừng tiến trình đang chạy';
     } else {
         statusText.style.color = '#3b82f6';
         stopBtn.style.display = 'block';
@@ -1998,6 +2003,10 @@ function renderFiles(files) {
             statusHtml = '<span class="status-badge status-error">Đã dừng</span>';
         } else if (f.status === 'error') {
             statusHtml = '<span class="status-badge status-error" title="' + (f.message || '') + '">Lỗi</span>';
+        } else if (f.status === 'waiting_cookie') {
+            statusHtml = '<span class="status-badge" style="background:#fef3c7; color:#b45309; border:1px solid #fde68a;">Chờ Cookie</span>';
+        } else if (f.status === 'waiting_ip') {
+            statusHtml = '<span class="status-badge" style="background:#fef3c7; color:#b45309; border:1px solid #fde68a;">Nghỉ nhả IP</span>';
         } else {
             statusHtml = '<span class="status-badge">' + f.status + '</span>';
         }

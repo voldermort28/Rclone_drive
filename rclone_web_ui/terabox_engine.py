@@ -17,6 +17,7 @@ import uuid
 import json
 import sys
 import hashlib
+import random
 
 try:
     from urllib.parse import urlparse, parse_qs, unquote
@@ -36,12 +37,16 @@ class TeraboxEngine:
     TERABOX_API_BASE = "https://www.terabox.app"
     CHUNK_SIZE = 1024 * 1024  # 1MB chunk size
     PROGRESS_THROTTLE = 3  # seconds between progress updates
+    BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 
-    def __init__(self, progress_callback, log_callback, stop_checker, state_callback=None):
-        self.progress_callback = progress_callback
-        self.log_callback = log_callback
-        self.stop_checker = stop_checker
+    def __init__(self, progress_callback=None, log_callback=None, stop_checker=None, state_callback=None, cookie_file=None):
+        self.progress_callback = progress_callback or (lambda p, m: None)
+        self.log_callback = log_callback or (lambda l, m: logging.log(l, m))
+        self.stop_checker = stop_checker or (lambda: False)
         self.state_callback = state_callback
+        self.cookie_file = cookie_file
+        self._current_cookie = ''
+        self._browserid = uuid.uuid4().hex
         self._process = None
         self._response = None  # for cancelling download stream
         self._stopped = False
@@ -193,12 +198,118 @@ class TeraboxEngine:
             url = 'https://' + url
         return url
 
+    def _get_browser_headers(self, is_api=False, referer=""):
+        """Generate realistic Chrome 135+ desktop browser headers to mimic normal users."""
+        headers = {
+            "User-Agent": self.BROWSER_USER_AGENT,
+            "Accept": "application/json, text/plain, */*" if is_api else "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Sec-Ch-Ua": '"Google Chrome";v="135", "Chromium";v="135", "Not-A.Brand";v="24"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty" if is_api else "document",
+            "Sec-Fetch-Mode": "cors" if is_api else "navigate",
+            "Sec-Fetch-Site": "same-origin" if referer else "none",
+        }
+        if referer:
+            headers["Referer"] = referer
+        if not is_api:
+            headers["Sec-Fetch-User"] = "?1"
+            headers["Upgrade-Insecure-Requests"] = "1"
+        return headers
+
     def _build_cookie_header(self, cookie_value):
-        """Build cookie header string from ndus value."""
+        """Build realistic browser cookie header with ndus, lang, and browserid."""
         cookie_value = (cookie_value or '').strip()
-        if 'ndus=' in cookie_value:
-            return cookie_value
-        return "ndus={0}; lang=en".format(cookie_value)
+        if not cookie_value:
+            return ""
+        if 'ndus=' not in cookie_value:
+            cookie_value = "ndus={0}".format(cookie_value)
+
+        parts = [cookie_value]
+        if 'lang=' not in cookie_value:
+            parts.append("lang=en")
+        if 'browserid=' not in cookie_value:
+            parts.append("browserid={0}".format(self._browserid))
+        return "; ".join(parts)
+
+    def _read_latest_cookie(self):
+        """Read newest cookie from cookie_file if available, otherwise return cached."""
+        if self.cookie_file and os.path.exists(self.cookie_file):
+            try:
+                with open(self.cookie_file, 'r', encoding='utf-8') as f:
+                    val = f.read().strip()
+                if val:
+                    return val
+            except Exception:
+                pass
+        return self._current_cookie
+
+    def _wait_for_cookie_or_ip(self, reason, current_cookie, attempt=1):
+        """
+        Wait for either:
+        1. User updating ndus cookie in tab-config / terabox_cookie.txt (wakes up immediately)
+        2. IP cooldown timer countdown
+        3. User clicking Stop (/api/stop)
+        Returns: new_cookie if updated, or current_cookie after cooldown, or None if stopped
+        """
+        if self._stopped or self.stop_checker():
+            return None
+
+        # Cooldown progression: 60s -> 180s (3m) -> 300s (5m)
+        cooldown_seconds = 60 if attempt <= 1 else (180 if attempt == 2 else 300)
+        is_cookie_error = (reason in ('cookie_expired', -6))
+
+        if is_cookie_error:
+            status_name = 'waiting_cookie'
+            prompt_msg = "⚠️ Cookie 'ndus' đã hết hạn! Vui lòng vào Tab Cấu hình để dán cookie mới. Tiến trình đang giữ nguyên chờ cookie..."
+            self._emit_state(status=status_name, phase='waiting_cookie', message=prompt_msg)
+            self.log_callback(logging.WARNING, "=" * 50)
+            self.log_callback(logging.WARNING, prompt_msg)
+        else:
+            status_name = 'waiting_ip'
+            prompt_msg = "⏳ Terabox yêu cầu xác thực / tạm giới hạn IP (400141 / 429). Hệ thống đang tạm nghỉ {0}s để nhả IP... (Bạn cũng có thể dán cookie 'ndus' mới từ trình duyệt vào Cấu hình để tiếp tục ngay)".format(cooldown_seconds)
+            self._emit_state(status=status_name, phase='waiting_ip', message=prompt_msg)
+            self.log_callback(logging.WARNING, "=" * 50)
+            self.log_callback(logging.WARNING, prompt_msg)
+
+        start_time = time.time()
+        cookie_before = (current_cookie or '').strip()
+        last_log_time = 0
+
+        while True:
+            if self._stopped or self.stop_checker():
+                self.log_callback(logging.INFO, "Người dùng đã bấm dừng trong khi đang chờ.")
+                return None
+
+            # 1. Check if user updated cookie in file
+            latest_in_file = self._read_latest_cookie()
+            if latest_in_file and latest_in_file.strip() != cookie_before:
+                self.log_callback(logging.INFO, "✅ Đã phát hiện cookie 'ndus' mới được lưu từ Tab Cấu hình!")
+                self._current_cookie = latest_in_file.strip()
+                self._emit_state(status='downloading', phase='download', message="Đã nhận cookie mới! Đang tiếp tục tiến trình...")
+                return self._current_cookie
+
+            # 2. Check cooldown timer
+            elapsed = time.time() - start_time
+            remaining = int(cooldown_seconds - elapsed)
+
+            now = time.time()
+            if now - last_log_time >= 5:
+                if is_cookie_error:
+                    msg = "⚠️ Đang chờ bạn cập nhật cookie 'ndus' mới trong Tab Cấu hình (Đã chờ {0}s)...".format(int(elapsed))
+                else:
+                    msg = "⏳ Đang tạm nghỉ nhả IP (còn {0}s). Hoặc bạn có thể dán cookie mới để bỏ qua chờ...".format(max(0, remaining))
+
+                self._emit_state(status=status_name, message=msg)
+                last_log_time = now
+
+            if not is_cookie_error and remaining <= 0:
+                self.log_callback(logging.INFO, "⏳ Hết thời gian tạm nghỉ nhả IP ({0}s). Đang thử kết nối lại Terabox...".format(cooldown_seconds))
+                self._emit_state(status='downloading', phase='download', message="Đang thử kết nối lại Terabox sau thời gian nghỉ...")
+                return current_cookie
+
+            time.sleep(1.5)
 
     def _find_between(self, s, start, end):
         start_index = s.find(start)
@@ -333,7 +444,24 @@ class TeraboxEngine:
             try:
                 r_sub = session.get(list_url, params=folder_params, timeout=30)
                 sub_data = r_sub.json()
-                time.sleep(0.4)
+
+                # Handle rate-limit / expired cookie during folder listing
+                sub_errno = sub_data.get("errno", 0)
+                if sub_errno == -6:
+                    new_ck = self._wait_for_cookie_or_ip('cookie_expired', session.headers.get("Cookie", ""))
+                    if not new_ck:
+                        break
+                    session.headers["Cookie"] = self._build_cookie_header(new_ck)
+                    continue
+                elif sub_errno == 400141:
+                    new_ck = self._wait_for_cookie_or_ip('need_verify', session.headers.get("Cookie", ""))
+                    if not new_ck:
+                        break
+                    session.headers["Cookie"] = self._build_cookie_header(new_ck)
+                    continue
+
+                # Human-like delay between pages (1.5 - 2.5s)
+                time.sleep(random.uniform(1.5, 2.5))
             except Exception as e:
                 self.log_callback(logging.WARNING, "Lỗi quét thư mục {0}: {1}".format(current_dir, str(e)))
                 break
@@ -383,158 +511,181 @@ class TeraboxEngine:
             return {"error": "Link Terabox không hợp lệ."}
 
         cookie_header = self._build_cookie_header(cookie)
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive",
-            "DNT": "1",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            "Cookie": cookie_header,
-        }
+        session = requests.Session()
+        session.headers.update(self._get_browser_headers())
+        session.headers["Cookie"] = self._build_cookie_header(cookie)
+        self._current_cookie = cookie
+
+        attempt = 0
+        max_attempts = 15
 
         try:
-            session = requests.Session()
-            session.headers.update(headers)
-            self.log_callback(logging.INFO, "Đang lấy thông tin xác thực từ trang...")
+            while attempt < max_attempts:
+                attempt += 1
+                if self.stop_checker() or self._stopped:
+                    return {"error": "Tiến trình bị dừng bởi người dùng."}
 
-            # Extract surl first
-            surl = ""
-            parsed = urlparse(full_url)
-            query = parse_qs(parsed.query)
-            if "surl" in query:
-                surl = query["surl"][0]
-            else:
-                m = re.search(r'/s/(?:1)?([A-Za-z0-9_-]+)', full_url)
-                if m:
-                    surl = m.group(1)
+                self.log_callback(logging.INFO, "Đang lấy thông tin xác thực từ trang (lần thử {0})...".format(attempt))
 
-            candidates = []
-            if surl:
-                candidates.extend([
-                    "https://www.terabox.app/s/1" + surl,
-                    "https://www.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
-                    "https://www.terabox.com/sharing/link?surl=" + surl + "&clearCache=1",
-                    "https://dm.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
-                ])
-            if full_url and full_url not in candidates:
-                candidates.append(full_url)
+                # Extract surl first
+                surl = ""
+                parsed = urlparse(full_url)
+                query = parse_qs(parsed.query)
+                if "surl" in query:
+                    surl = query["surl"][0]
+                else:
+                    m = re.search(r'/s/(?:1)?([A-Za-z0-9_-]+)', full_url)
+                    if m:
+                        surl = m.group(1)
 
-            js_token = ""
-            bdstoken = ""
-            sign = ""
-            timestamp_val = ""
-            shareid = ""
-            uk = ""
-            pcftoken = ""
-            logid = ""
-            api_base = "https://www.terabox.app"
-            referer_url = full_url
-            need_verify = False
-
-            for cand_url in candidates:
-                try:
-                    r = session.get(cand_url, timeout=10)
-                    if not r.ok:
-                        continue
-                    html = r.text
-                    if 'need verify' in html or '400141' in html:
-                        need_verify = True
-                    decoded_html = unquote(html)
-                    combined_html = html + "\n" + decoded_html
-
-                    cur_js = self._extract_first(combined_html, [
-                        r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-                        r'fn%28%22(.*?)%22%29',
-                        r'"jsToken"\s*:\s*"([^"]+)"',
-                        r'fn\("([^"]+)"\)',
+                candidates = []
+                if surl:
+                    candidates.extend([
+                        "https://www.terabox.app/s/1" + surl,
+                        "https://www.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
+                        "https://www.terabox.com/sharing/link?surl=" + surl + "&clearCache=1",
+                        "https://dm.terabox.app/sharing/link?surl=" + surl + "&clearCache=1",
                     ])
+                if full_url and full_url not in candidates:
+                    candidates.append(full_url)
 
-                    if cur_js:
-                        js_token = cur_js
-                        logid = self._find_between(html, 'dp-logid=', '&')
+                js_token = ""
+                bdstoken = ""
+                sign = ""
+                timestamp_val = ""
+                shareid = ""
+                uk = ""
+                pcftoken = ""
+                logid = ""
+                api_base = "https://www.terabox.app"
+                referer_url = full_url
+                need_verify = False
 
-                        m_td = re.search(r'(?:var\s+)?templateData\s*=\s*(\{.*?\});', html)
-                        if m_td:
-                            try:
-                                td = json.loads(m_td.group(1))
-                                bdstoken = str(td.get('bdstoken', ''))
-                                uk = str(td.get('uk', ''))
-                            except Exception:
-                                pass
+                for cand_url in candidates:
+                    if self.stop_checker() or self._stopped:
+                        return {"error": "Tiến trình bị dừng bởi người dùng."}
+                    try:
+                        r = session.get(cand_url, timeout=10)
+                        if not r.ok:
+                            continue
+                        html = r.text
+                        if 'need verify' in html or '400141' in html:
+                            need_verify = True
+                        decoded_html = unquote(html)
+                        combined_html = html + "\n" + decoded_html
 
-                        if not bdstoken:
-                            bdstoken = self._extract_share_field(combined_html, ['bdstoken'])
-                        if not uk:
-                            uk = self._extract_share_field(combined_html, ['uk', 'share_uk', 'shareUk'], numeric=True)
-                        if not sign:
-                            sign = self._extract_share_field(combined_html, ['sign'])
-                        if not timestamp_val:
-                            timestamp_val = self._extract_share_field(combined_html, ['timestamp', 'time'], numeric=True)
-                        if not shareid:
-                            shareid = self._extract_share_field(combined_html, ['shareid', 'share_id', 'shareId'], numeric=True)
+                        cur_js = self._extract_first(combined_html, [
+                            r'jsToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+                            r'fn%28%22(.*?)%22%29',
+                            r'"jsToken"\s*:\s*"([^"]+)"',
+                            r'fn\("([^"]+)"\)',
+                        ])
 
-                        m_pcf = re.search(r'pcftoken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
-                        if m_pcf:
-                            pcftoken = m_pcf.group(1)
+                        if cur_js:
+                            js_token = cur_js
+                            logid = self._find_between(html, 'dp-logid=', '&')
 
-                        cand_parsed = urlparse(r.url)
-                        api_base = "{0}://{1}".format(cand_parsed.scheme, cand_parsed.netloc)
-                        referer_url = r.url
-                        break
-                except Exception:
-                    pass
+                            m_td = re.search(r'(?:var\s+)?templateData\s*=\s*(\{.*?\});', html)
+                            if m_td:
+                                try:
+                                    td = json.loads(m_td.group(1))
+                                    bdstoken = str(td.get('bdstoken', ''))
+                                    uk = str(td.get('uk', ''))
+                                except Exception:
+                                    pass
 
-            if not surl:
-                return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
+                            if not bdstoken:
+                                bdstoken = self._extract_share_field(combined_html, ['bdstoken'])
+                            if not uk:
+                                uk = self._extract_share_field(combined_html, ['uk', 'share_uk', 'shareUk'], numeric=True)
+                            if not sign:
+                                sign = self._extract_share_field(combined_html, ['sign'])
+                            if not timestamp_val:
+                                timestamp_val = self._extract_share_field(combined_html, ['timestamp', 'time'], numeric=True)
+                            if not shareid:
+                                shareid = self._extract_share_field(combined_html, ['shareid', 'share_id', 'shareId'], numeric=True)
 
-            if not js_token:
-                if need_verify:
-                    return {"error": "Terabox chặn IP và yêu cầu xác minh Captcha (errno 400141: 'need verify'). Terabox WAF đang chặn IP VPS tạm thời do quét nhiều file. Vui lòng thử lại sau vài giờ hoặc lưu file vào Terabox cá nhân."}
-                return {"error": "Không lấy được jsToken. Cookie 'ndus' có thể đã hết hạn hoặc Terabox chặn IP."}
+                            m_pcf = re.search(r'pcftoken["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
+                            if m_pcf:
+                                pcftoken = m_pcf.group(1)
 
-            self.log_callback(logging.INFO, "Đã lấy được jsToken. Đang lấy danh sách file...")
+                            cand_parsed = urlparse(r.url)
+                            api_base = "{0}://{1}".format(cand_parsed.scheme, cand_parsed.netloc)
+                            referer_url = r.url
+                            break
+                    except Exception:
+                        pass
 
-            list_url = "{0}/share/list".format(api_base)
-            list_params = {
-                "app_id": "250528",
-                "web": "1",
-                "channel": "dubox",
-                "clienttype": "0",
-                "jsToken": js_token,
-                "page": "1",
-                "num": "50",
-                "by": "name",
-                "order": "asc",
-                "site_referer": referer_url,
-                "shorturl": surl,
-                "root": "1",
-            }
-            if logid:
-                list_params["dp-logid"] = logid
-            if pcftoken:
-                list_params["pcftoken"] = pcftoken
+                if not surl:
+                    return {"error": "Không tìm thấy mã chia sẻ (surl) trong link."}
 
-            r2 = session.get(list_url, params=list_params, timeout=30)
-            data2 = r2.json()
+                if not js_token:
+                    reason = 'need_verify' if need_verify else 'cookie_expired'
+                    new_ck = self._wait_for_cookie_or_ip(reason, cookie, attempt)
+                    if not new_ck:
+                        return {"error": "Tiến trình bị dừng bởi người dùng."}
+                    cookie = new_ck
+                    session.headers["Cookie"] = self._build_cookie_header(cookie)
+                    continue
 
-            if data2.get("errno") != 0:
-                if api_base != "https://www.terabox.app":
-                    r2 = session.get("https://www.terabox.app/share/list", params=list_params, timeout=30)
-                    data2 = r2.json()
-                    if data2.get("errno") == 0:
-                        api_base = "https://www.terabox.app"
-                        list_url = "{0}/share/list".format(api_base)
+                self.log_callback(logging.INFO, "Đã lấy được jsToken. Đang lấy danh sách file...")
+
+                list_url = "{0}/share/list".format(api_base)
+                list_params = {
+                    "app_id": "250528",
+                    "web": "1",
+                    "channel": "dubox",
+                    "clienttype": "0",
+                    "jsToken": js_token,
+                    "page": "1",
+                    "num": "50",
+                    "by": "name",
+                    "order": "asc",
+                    "site_referer": referer_url,
+                    "shorturl": surl,
+                    "root": "1",
+                }
+                if logid:
+                    list_params["dp-logid"] = logid
+                if pcftoken:
+                    list_params["pcftoken"] = pcftoken
+
+                r2 = session.get(list_url, params=list_params, timeout=30)
+                data2 = r2.json()
 
                 if data2.get("errno") != 0:
-                    errno = data2.get("errno")
-                    if errno == -6:
-                        return {"error": "Cookie 'ndus' hết hạn. Vui lòng cập nhật cookie mới."}
-                    return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(data2.get("errmsg", "Lỗi"), errno)}
+                    if api_base != "https://www.terabox.app":
+                        r2 = session.get("https://www.terabox.app/share/list", params=list_params, timeout=30)
+                        data2 = r2.json()
+                        if data2.get("errno") == 0:
+                            api_base = "https://www.terabox.app"
+                            list_url = "{0}/share/list".format(api_base)
 
-            lst = data2.get("list", [])
-            if not lst:
-                return {"error": "Link này rỗng hoặc không có file nào."}
+                    if data2.get("errno") != 0:
+                        errno = data2.get("errno")
+                        if errno == -6:
+                            new_ck = self._wait_for_cookie_or_ip('cookie_expired', cookie, attempt)
+                            if not new_ck:
+                                return {"error": "Tiến trình bị dừng bởi người dùng."}
+                            cookie = new_ck
+                            session.headers["Cookie"] = self._build_cookie_header(cookie)
+                            continue
+                        elif errno in (400141, 429):
+                            new_ck = self._wait_for_cookie_or_ip('need_verify', cookie, attempt)
+                            if not new_ck:
+                                return {"error": "Tiến trình bị dừng bởi người dùng."}
+                            cookie = new_ck
+                            session.headers["Cookie"] = self._build_cookie_header(cookie)
+                            continue
+                        return {"error": "Terabox API list lỗi: {0} (errno: {1})".format(data2.get("errmsg", "Lỗi"), errno)}
+
+                lst = data2.get("list", [])
+                if not lst:
+                    return {"error": "Link này rỗng hoặc không có file nào."}
+
+                break
+            else:
+                return {"error": "Không thể kết nối Terabox sau các lần thử."}
 
             if not shareid:
                 shareid = self._pick_first(data2, ["share_id", "shareid", "shareId"])
@@ -666,6 +817,7 @@ class TeraboxEngine:
 
     def _get_fresh_dlink(self, item, cookie):
         """Get or refresh direct download link for an item."""
+        self._last_dlink_error = 'need_verify'
         if item.get("dlink"):
             return item["dlink"]
 
@@ -673,10 +825,8 @@ class TeraboxEngine:
         session = share_ctx.get("session")
         if not session:
             session = requests.Session()
-            session.headers.update({
-                "Cookie": self._build_cookie_header(cookie),
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            })
+            session.headers.update(self._get_browser_headers(is_api=True, referer=item.get("url") or "https://www.terabox.app/"))
+        session.headers["Cookie"] = self._build_cookie_header(cookie)
 
         api_base = share_ctx.get("api_base") or "https://www.terabox.app"
         js_token = share_ctx.get("js_token", "")
@@ -697,6 +847,12 @@ class TeraboxEngine:
                     "dir": parent_dir,
                 }, timeout=20)
                 d_dir = r_dir.json()
+                d_errno = d_dir.get("errno", 0)
+                if d_errno == -6:
+                    self._last_dlink_error = 'cookie_expired'
+                elif d_errno in (400141, 429):
+                    self._last_dlink_error = 'need_verify'
+
                 for sub in d_dir.get("list", []):
                     if str(sub.get("fs_id", "")) == str(item.get("fs_id", "")):
                         dlink = sub.get("dlink", "")
@@ -730,7 +886,13 @@ class TeraboxEngine:
             try:
                 r_dl = session.get("{0}/share/download".format(api_base), params=dl_params, timeout=20)
                 data_dl = r_dl.json()
-                if data_dl.get("errno") == 0:
+                dl_errno = data_dl.get("errno", 0)
+                if dl_errno == -6:
+                    self._last_dlink_error = 'cookie_expired'
+                elif dl_errno in (400141, 429):
+                    self._last_dlink_error = 'need_verify'
+
+                if dl_errno == 0:
                     dlink = data_dl.get("dlink", "")
                     if not dlink and data_dl.get("list"):
                         dlink = data_dl["list"][0].get("dlink", "")
@@ -747,7 +909,7 @@ class TeraboxEngine:
                 '-g',
                 '--no-warnings',
                 '--add-header', 'Cookie: {0}'.format(self._build_cookie_header(cookie)),
-                '--add-header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                '--add-header', 'User-Agent: {0}'.format(self.BROWSER_USER_AGENT),
                 item.get("url") or ("https://www.terabox.app/s/" + surl)
             ]
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -781,10 +943,8 @@ class TeraboxEngine:
         part_path_for_io = self._path_for_io(part_path)
 
         cookie_header = self._build_cookie_header(cookie)
-        headers = {
-            "Cookie": cookie_header,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
+        headers = self._get_browser_headers(is_api=False, referer="https://www.terabox.app/")
+        headers["Cookie"] = cookie_header
 
         try:
             if os.path.exists(file_path_for_io):
@@ -828,6 +988,17 @@ class TeraboxEngine:
             self._response = requests.get(download_url, headers=headers, stream=True, timeout=60)
             status_code = self._response.status_code
 
+            if status_code in (401, 403):
+                self.log_callback(logging.WARNING, "HTTP {0}: Link tải đã hết hạn hoặc cookie không còn hợp lệ.".format(status_code))
+                self._download_error = 'retryable'
+                self._download_fail_reason = 'need_verify'
+                return None
+            elif status_code == 429:
+                self.log_callback(logging.WARNING, "HTTP 429: Bị giới hạn tần suất tải từ Terabox.".format(status_code))
+                self._download_error = 'retryable'
+                self._download_fail_reason = 'need_verify'
+                return None
+
             if resume_from > 0:
                 if status_code != 206:
                     self.log_callback(logging.WARNING,
@@ -840,11 +1011,13 @@ class TeraboxEngine:
                     if self._response.status_code != 200:
                         self.log_callback(logging.ERROR, "HTTP tải file lỗi: {0}".format(self._response.status_code))
                         self._download_error = 'retryable'
+                        self._download_fail_reason = 'need_verify' if self._response.status_code in (401, 403, 429) else 'retryable'
                         return None
             else:
                 if status_code != 200:
                     self.log_callback(logging.ERROR, "HTTP tải file lỗi: {0}".format(status_code))
                     self._download_error = 'retryable'
+                    self._download_fail_reason = 'need_verify' if status_code in (401, 403, 429) else 'retryable'
                     return None
 
             content_length = int(self._response.headers.get('Content-Length', file_size) or file_size)
@@ -1069,6 +1242,16 @@ class TeraboxEngine:
                 if rel_dir:
                     self.log_callback(logging.INFO, "Thư mục đích con: {0}".format(rel_dir))
 
+                # Human-like delay between files (3 - 7s)
+                if index > 1:
+                    inter_delay = random.uniform(3.0, 7.0)
+                    self.log_callback(logging.INFO, "⏳ Nghỉ {0:.1f}s trước khi tải file tiếp theo (mô phỏng người dùng thật)...".format(inter_delay))
+                    st_delay = time.time()
+                    while time.time() - st_delay < inter_delay:
+                        if self.stop_checker() or self._stopped:
+                            return False
+                        time.sleep(0.5)
+
                 # Step 1: Check GDrive skip
                 if rel_dir:
                     check_path = (rel_dir.replace('\\', '/').strip('/') + '/' + display_name).strip('/')
@@ -1100,14 +1283,23 @@ class TeraboxEngine:
                     self._emit_state(status='downloading', phase='download')
                     self._progress(2, "Bắt đầu tải từ Terabox...")
 
-                    for attempt in range(max_attempts):
+                    attempt = 0
+                    while True:
                         if self.stop_checker() or self._stopped:
                             return False
+                        attempt += 1
+
+                        # Always read latest cookie if updated in Settings
+                        cookie = self._read_latest_cookie()
 
                         download_url = self._get_fresh_dlink(item, cookie)
                         if not download_url:
-                            self.log_callback(logging.WARNING, "Chưa lấy được link tải trực tiếp (lần {0}/{1})...".format(attempt + 1, max_attempts))
-                            time.sleep(2)
+                            reason = getattr(self, '_last_dlink_error', 'need_verify')
+                            self.log_callback(logging.WARNING, "Chưa lấy được link tải trực tiếp (lần {0})...".format(attempt))
+                            new_ck = self._wait_for_cookie_or_ip(reason, cookie, attempt)
+                            if not new_ck:
+                                return False
+                            cookie = new_ck
                             continue
 
                         local_path = self.download_to_vps(download_url, cookie, item_tmp_dir, display_name, item_size)
@@ -1116,11 +1308,17 @@ class TeraboxEngine:
 
                         if self.stop_checker() or self._stopped or self._download_error == 'stopped':
                             return False
-                        if self._download_error != 'retryable':
+                        if self._download_error == 'fatal':
                             return False
 
-                        self.log_callback(logging.WARNING, "Link tải lỗi/hết hạn. Đang lấy link mới (lần {0}/{1})...".format(attempt + 1, max_attempts))
+                        # Retryable error (401, 403, 429, timeout, connection drop, etc.)
+                        self.log_callback(logging.WARNING, "Tải file gián đoạn (lần {0}). Đang chuẩn bị thử lại...".format(attempt))
                         item["dlink"] = ""
+                        reason = getattr(self, '_download_fail_reason', 'need_verify')
+                        new_ck = self._wait_for_cookie_or_ip(reason, cookie, attempt)
+                        if not new_ck:
+                            return False
+                        cookie = new_ck
 
                     if not local_path:
                         self.log_callback(logging.ERROR, "Tải file '{0}' thất bại sau các lần thử.".format(display_name))

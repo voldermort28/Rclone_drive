@@ -70,24 +70,31 @@ download_state = {
 }
 
 def sync_tool_progress_to_queue(tool_name, percent, message):
-    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing', 'waiting_cookie', 'waiting_ip'):
         download_state['progress'] = percent
         download_state['message'] = message
         if download_state['files']:
             download_state['files'][0]['progress'] = percent
             download_state['files'][0]['message'] = message
-            download_state['files'][0]['status'] = 'downloading'
+            if download_state['files'][0]['status'] not in ('waiting_cookie', 'waiting_ip'):
+                download_state['files'][0]['status'] = 'downloading'
 
 def sync_tool_state_update_to_queue(tool_name, values):
-    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing', 'waiting_cookie', 'waiting_ip'):
+        if 'status' in values and values['status'] in ('waiting_cookie', 'waiting_ip', 'downloading'):
+            download_state['status'] = values['status']
+        if 'message' in values:
+            download_state['message'] = values['message']
         if download_state['files']:
             if 'file_name' in values:
                 download_state['files'][0]['name'] = values['file_name']
             if 'file_size_human' in values:
                 download_state['files'][0]['message'] = "Size: {0}".format(values['file_size_human'])
+            if 'status' in values and values['status'] in ('waiting_cookie', 'waiting_ip'):
+                download_state['files'][0]['status'] = values['status']
 
 def sync_tool_log_to_queue(tool_name, level, message):
-    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing'):
+    if download_state.get('job_type') == tool_name and download_state.get('status') in ('downloading', 'initializing', 'waiting_cookie', 'waiting_ip'):
         download_state['logs'].append({
             'level': logging.getLevelName(level),
             'message': "[{0}] {1}".format(tool_name.upper(), message)
@@ -485,7 +492,7 @@ def run_real_terabox_job(job):
         download_state['job_type'] = None
         return False
         
-    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update)
+    _terabox_engine = TeraboxEngine(_terabox_progress, _terabox_log, _terabox_stop_checker, _terabox_state_update, cookie_file=TERABOX_COOKIE_FILE)
     
     try:
         download_state['status'] = 'downloading'
@@ -732,7 +739,7 @@ def queue_worker_loop():
     while True:
         time.sleep(5)
         
-        if download_state['status'] in ['downloading', 'initializing']:
+        if download_state['status'] in ['downloading', 'initializing', 'waiting_cookie', 'waiting_ip']:
             continue
             
         q = load_queue()
@@ -810,7 +817,7 @@ worker_thread.start()
 @app.route('/api/stop', methods=['POST'])
 def stop_download():
     global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine
-    if download_state['status'] in ['downloading', 'initializing']:
+    if download_state['status'] in ['downloading', 'initializing', 'waiting_cookie', 'waiting_ip']:
         stop_event.set()
         
         terabox_state['stop_flag'] = True
