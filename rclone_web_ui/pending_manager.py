@@ -27,7 +27,8 @@ ENGINE_NAMES = {
     'mediafire': 'MediaFire',
     'mega': 'Mega',
     'fichier': '1fichier',
-    'pixeldrain': 'Pixeldrain'
+    'pixeldrain': 'Pixeldrain',
+    'downcode': 'DownCode'
 }
 
 

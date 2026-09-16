@@ -2141,7 +2141,11 @@ function renderQueue(records) {
             execTimeStr = "Sẵn sàng";
         }
 
-        var urlsHtml = formatUrlsHtml(rec.urls || '');
+        var displaySource = rec.original_url || rec.urls || '';
+        var urlsHtml = formatUrlsHtml(displaySource);
+        if (rec.original_url && rec.urls && rec.original_url !== rec.urls) {
+            urlsHtml += '<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">' + formatUrlsHtml(rec.urls) + '</div>';
+        }
 
         var jobType = rec.type || 'rclone';
         var typeBadge = '';
@@ -2153,6 +2157,12 @@ function renderQueue(records) {
             typeBadge = '<span class="status-badge" style="background-color: #10b981; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Terabox</span>';
         } else if (jobType === 'mega') {
             typeBadge = '<span class="status-badge" style="background-color: #ef4444; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Mega</span>';
+        } else if (jobType === '1fichier') {
+            typeBadge = '<span class="status-badge" style="background-color: #d97706; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">1fichier</span>';
+        } else if (jobType === 'pixeldrain') {
+            typeBadge = '<span class="status-badge" style="background-color: #06b6d4; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Pixeldrain</span>';
+        } else if (jobType === 'downcode') {
+            typeBadge = '<span class="status-badge" style="background-color: #8b5cf6; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">DownCode</span>';
         } else {
             typeBadge = '<span class="status-badge" style="background-color: #6366f1; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">GDrive</span>';
         }

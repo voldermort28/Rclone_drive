@@ -152,10 +152,13 @@ def detect_url_type(url):
         return '1fichier'
     if 'pixeldrain.com' in url_lower:
         return 'pixeldrain'
+    if DowncodeEngine.is_downcode(url):
+        return 'downcode'
     return 'rclone'
 
 # ==================== BACKGROUND WORKER ====================
 from rclone_engine import RcloneEngine
+from downcode_engine import DowncodeEngine
 
 def scrape_folder_name_from_url(url):
     """Helper to get folder name from GDrive page title."""
@@ -734,6 +737,64 @@ def run_real_pixeldrain_job(job):
     return False
 
 
+def run_real_downcode_job(job):
+    global download_state
+    from downcode_engine import DowncodeEngine
+
+    code_input = job.get('urls', '')
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Đang giải mã DownCode: {0}...'.format(code_input),
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': code_input, 'name': code_input, 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': code_input,
+        'output_dir': job.get('dest', ''),
+        'job_id': job.get('id', ''),
+        'job_type': 'downcode'
+    })
+
+    logging.info("[DOWNCODE] Bắt đầu giải mã mã: %s", code_input)
+    res = DowncodeEngine.resolve(code_input)
+    if not res.get('success'):
+        err_msg = res.get('error') or 'Giải mã DownCode thất bại.'
+        download_state['status'] = 'error'
+        download_state['message'] = 'Lỗi DownCode: {0}'.format(err_msg)
+        logging.error("[DOWNCODE] Giải mã thất bại: %s", err_msg)
+        download_state['job_type'] = None
+        return False
+
+    target_url = res.get('url')
+    resolved_code = res.get('code') or code_input
+    logging.info("[DOWNCODE] Giải mã thành công %s -> %s (host: %s)", resolved_code, target_url, res.get('text_note', ''))
+
+    job['original_url'] = 'DownCode: {0}'.format(resolved_code)
+    job['urls'] = target_url
+    target_type = detect_url_type(target_url)
+    job['type'] = target_type
+
+    if target_type == 'rclone':
+        if 'drive.google.com' in target_url:
+            fid = extract_drive_id(target_url)
+            if fid:
+                job['urls'] = 'gc:{0}'.format(fid)
+        return run_real_rclone_job(job)
+    elif target_type == 'mediafire':
+        return run_real_mediafire_job(job)
+    elif target_type == 'fshare':
+        return run_real_fshare_job(job)
+    elif target_type == 'terabox':
+        return run_real_terabox_job(job)
+    elif target_type == 'mega':
+        return run_real_mega_job(job)
+    elif target_type == '1fichier':
+        return run_real_fichier_job(job)
+    elif target_type == 'pixeldrain':
+        return run_real_pixeldrain_job(job)
+    else:
+        return run_real_rclone_job(job)
+
+
 def queue_worker_loop():
     global download_state
     while True:
@@ -769,6 +830,8 @@ def queue_worker_loop():
                 quota_hit = run_real_fichier_job(job_to_run)
             elif job_type == 'pixeldrain':
                 quota_hit = run_real_pixeldrain_job(job_to_run)
+            elif job_type == 'downcode':
+                quota_hit = run_real_downcode_job(job_to_run)
             else:
                 quota_hit = False
             
@@ -979,8 +1042,8 @@ def start_download():
         # If it's a Drive URL, extract just the URL part (strip ?fbclid etc)
         if 'drive.google.com' in line:
             links.append(line)
-        elif line.startswith('gc:') or ':' in line:
-            # Already rclone format
+        elif line.startswith('gc:') or ':' in line or DowncodeEngine.is_downcode(line):
+            # Already rclone format, URL with protocol, or DownCode code/link
             links.append(line)
     
     if not links and raw_text.strip():
@@ -993,13 +1056,26 @@ def start_download():
         
         job_type = detect_url_type(line)
         
+        if job_type == 'downcode':
+            res = DowncodeEngine.resolve(line)
+            if res.get('success'):
+                target_url = res.get('url')
+                code_str = res.get('code') or line
+                original_url = 'DownCode: {0}'.format(code_str)
+                line = target_url
+                source_path = target_url
+                job_type = detect_url_type(target_url)
+            else:
+                original_url = 'DownCode: {0}'.format(line)
+        
         if job_type == 'rclone':
             # Normalize source
             if 'drive.google.com' in line:
-                original_url = line
+                if not original_url:
+                    original_url = line
                 fid = extract_drive_id(line)
                 if fid:
-                    source_path = f'gc:{fid}'
+                    source_path = 'gc:{0}'.format(fid)
         
         job = {
             'id': str(uuid.uuid4()),
@@ -1019,7 +1095,7 @@ def start_download():
         added_count += 1
     
     save_queue(q)
-    return jsonify({'message': f'Đã thêm {added_count} job vào hàng đợi!'})
+    return jsonify({'message': 'Đã thêm {0} job vào hàng đợi!'.format(added_count)})
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
@@ -1242,9 +1318,19 @@ def parse_url():
     for line in raw.strip().splitlines():
         line = line.strip()
         if not line: continue
+        if DowncodeEngine.is_downcode(line):
+            res = DowncodeEngine.resolve(line)
+            if res.get('success'):
+                target = res.get('url')
+                fid = extract_drive_id(target)
+                if fid:
+                    results.append({'original': line, 'parsed': '{0}:{1}'.format(remote, fid), 'id': fid, 'target': target, 'resolved': True})
+                else:
+                    results.append({'original': line, 'parsed': target, 'id': None, 'target': target, 'resolved': True})
+                continue
         if 'drive.google.com' in line:
             fid = extract_drive_id(line)
-            if fid: results.append({'original': line, 'parsed': f'{remote}:{fid}', 'id': fid})
+            if fid: results.append({'original': line, 'parsed': '{0}:{1}'.format(remote, fid), 'id': fid})
             else: results.append({'original': line, 'parsed': line, 'id': None})
         else:
             results.append({'original': line, 'parsed': line, 'id': None})
