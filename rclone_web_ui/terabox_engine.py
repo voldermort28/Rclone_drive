@@ -93,7 +93,7 @@ class TeraboxEngine:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         sa_dir = os.path.join(base_dir, 'sa')
         if os.path.isdir(sa_dir) and glob.glob(os.path.join(sa_dir, '*.json')):
-            return sa_dir
+            return sa_dir if sa_dir.endswith('/') else sa_dir + '/'
         return None
 
     # ==================== PATH & SYSTEM ENCODING FIXES ====================
