@@ -77,6 +77,34 @@ class RcloneEngine:
             except Exception:
                 pass
 
+    def _is_team_drive_target(self, destination):
+        """
+        Check if destination remote is a Shared Drive (Team Drive).
+        Google Service Accounts have 0 personal storage quota and can ONLY write to Shared Drives.
+        Writing to Personal My Drive with Service Accounts causes Google API to return 404 / 403 storageQuotaExceeded.
+        """
+        if not destination:
+            return False
+        remote_name = destination.split(':')[0] if ':' in destination else ''
+        if not remote_name:
+            return False
+        config_path = os.path.expanduser('~/.config/rclone/rclone.conf')
+        if not os.path.exists(config_path):
+            return False
+        try:
+            try:
+                import configparser
+            except ImportError:
+                import ConfigParser as configparser
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            if config.has_section(remote_name):
+                if config.has_option(remote_name, 'team_drive') and config.get(remote_name, 'team_drive').strip():
+                    return True
+        except Exception:
+            pass
+        return False
+
     def run_copy(self, source, destination):
         binary = self._detect_binary()
         
@@ -93,14 +121,17 @@ class RcloneEngine:
             "--drive-acknowledge-abuse",
         ]
         
-        # Auto-add SA rotation flags if SA directory exists
+        # Auto-add SA rotation flags ONLY if SA directory exists AND destination is a Shared Drive
         sa_dir = self._get_sa_dir()
         if sa_dir:
-            sa_count = len(glob.glob(os.path.join(sa_dir, '*.json')))
-            cmd.extend([
-                "--drive-service-account-file-path", sa_dir,
-            ])
-            self.log_callback(logging.INFO, f"SA rotation enabled: {sa_count} accounts in {sa_dir}")
+            if self._is_team_drive_target(destination):
+                sa_count = len(glob.glob(os.path.join(sa_dir, '*.json')))
+                cmd.extend([
+                    "--drive-service-account-file-path", sa_dir,
+                ])
+                self.log_callback(logging.INFO, "SA rotation enabled: {0} accounts in {1} (Shared Drive target)".format(sa_count, sa_dir))
+            else:
+                self.log_callback(logging.INFO, "Destination is Personal Google Drive (My Drive). SA rotation disabled to prevent Google API 403/404 quota errors.")
         
         self.log_callback(logging.INFO, f"Executing command: {' '.join(cmd)}")
         
@@ -203,7 +234,7 @@ class RcloneEngine:
         ]
         
         sa_dir = self._get_sa_dir()
-        if sa_dir:
+        if sa_dir and self._is_team_drive_target(destination):
             cmd.extend(["--drive-service-account-file-path", sa_dir])
             
         self.log_callback(logging.INFO, f"Executing VERIFY command: {' '.join(cmd)}")
