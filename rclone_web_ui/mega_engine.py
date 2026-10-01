@@ -242,21 +242,21 @@ class MegaEngine:
         """
         url = (url or '').strip()
         
-        # New folder format with specific file: mega.nz/folder/ID#KEY/file/NODE_ID
-        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#([^/]+)/file/([^/?#]+)', url, re.I)
+        # New folder format with specific file or keyword: mega.nz/folder/ID#KEY/file/SPEC
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#([^/]+)/file/(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
-            node_id = m.group(3)
-            return 'folder_file', (folder_id, node_id), self._str_to_a32(key_bytes)
+            spec = m.group(3).split('?')[0].split('#')[0].rstrip('/')
+            return 'folder_file', (folder_id, spec), self._str_to_a32(key_bytes)
             
-        # Old folder format with specific file: mega.nz/#F!ID!KEY/file/NODE_ID
-        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#F!([^!]+)!([^/!]+)/file/([^/?#]+)', url, re.I)
+        # Old folder format with specific file or keyword: mega.nz/#F!ID!KEY/file/SPEC
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#F!([^!]+)!([^/!]+)/file/(.+)', url, re.I)
         if m:
             folder_id = m.group(1)
             key_bytes = self._b64_url_decode(m.group(2))
-            node_id = m.group(3)
-            return 'folder_file', (folder_id, node_id), self._str_to_a32(key_bytes)
+            spec = m.group(3).split('?')[0].split('#')[0].rstrip('/')
+            return 'folder_file', (folder_id, spec), self._str_to_a32(key_bytes)
 
         # New folder format: mega.nz/folder/ID#KEY
         m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#(.+)', url, re.I)
@@ -349,7 +349,13 @@ class MegaEngine:
             }
 
         if url_type == 'folder_file':
-            folder_id, target_node_id = node_id
+            folder_id, target_spec = node_id
+            try:
+                import urllib.parse
+                target_spec = urllib.parse.unquote(target_spec).strip()
+            except Exception:
+                target_spec = str(target_spec).strip()
+
             try:
                 data = self._api_request({'a': 'f', 'c': 1, 'ca': 1, 'r': 1}, folder_id)
             except Exception as e:
@@ -366,35 +372,77 @@ class MegaEngine:
                     root_handle = n.get('h')
                     break
 
-            target_node = next((n for n in raw_nodes if n.get('h') == target_node_id), None)
-            if not target_node:
-                return {'error': 'Không tìm thấy file trong folder Mega (ID: {0}).'.format(target_node_id)}
+            target_node = None
+            node_key_dec = None
+            safe_filename = None
 
-            k_str = target_node.get('k', '')
-            a_str = target_node.get('a', '')
-            s = target_node.get('s', 0)
-            enc_key_b64 = ''
-            if k_str:
-                parts = k_str.split('/')
-                for part in parts:
-                    if ':' in part:
-                        h_part, k_part = part.split(':', 1)
-                        if h_part == root_handle:
-                            enc_key_b64 = k_part
+            # 1. Try exact handle/node ID match first
+            for n in raw_nodes:
+                if n.get('h') == target_spec:
+                    target_node = n
+                    break
+
+            if target_node:
+                k_str = target_node.get('k', '')
+                a_str = target_node.get('a', '')
+                enc_key_b64 = ''
+                if k_str:
+                    parts = k_str.split('/')
+                    for part in parts:
+                        if ':' in part:
+                            h_part, k_part = part.split(':', 1)
+                            if h_part == root_handle:
+                                enc_key_b64 = k_part
+                                break
+                    if not enc_key_b64:
+                        first_part = parts[0]
+                        enc_key_b64 = first_part.split(':', 1)[1] if ':' in first_part else first_part
+                enc_key_bytes = self._b64_url_decode(enc_key_b64)
+                enc_key_a32 = self._str_to_a32(enc_key_bytes)
+                node_key_dec = self._decrypt_key(enc_key_a32, node_key)
+                attrs = self._decrypt_attr(a_str, node_key_dec)
+                name = attrs.get('n', 'file_{0}'.format(target_node.get('h', '')))
+                safe_filename = self._safe_name(name)
+            else:
+                # 2. If not found by handle, search by filename or keyword
+                spec_lower = target_spec.lower()
+                for n in raw_nodes:
+                    if n.get('t') == 1 or n.get('t') == 2:
+                        continue
+                    k_str = n.get('k', '')
+                    if not k_str:
+                        continue
+                    enc_key_b64 = ''
+                    parts = k_str.split('/')
+                    for part in parts:
+                        if ':' in part:
+                            h_part, k_part = part.split(':', 1)
+                            if h_part == root_handle:
+                                enc_key_b64 = k_part
+                                break
+                    if not enc_key_b64:
+                        first_part = parts[0]
+                        enc_key_b64 = first_part.split(':', 1)[1] if ':' in first_part else first_part
+                    try:
+                        enc_key_bytes = self._b64_url_decode(enc_key_b64)
+                        enc_key_a32 = self._str_to_a32(enc_key_bytes)
+                        n_key_dec = self._decrypt_key(enc_key_a32, node_key)
+                        attrs = self._decrypt_attr(n.get('a', ''), n_key_dec)
+                        fname = attrs.get('n', '')
+                        if spec_lower in fname.lower():
+                            target_node = n
+                            node_key_dec = n_key_dec
+                            safe_filename = self._safe_name(fname)
                             break
-                if not enc_key_b64:
-                    first_part = parts[0]
-                    enc_key_b64 = first_part.split(':', 1)[1] if ':' in first_part else first_part
+                    except Exception:
+                        continue
 
-            enc_key_bytes = self._b64_url_decode(enc_key_b64)
-            enc_key_a32 = self._str_to_a32(enc_key_bytes)
-            node_key_dec = self._decrypt_key(enc_key_a32, node_key)
-            attrs = self._decrypt_attr(a_str, node_key_dec)
-            name = attrs.get('n', 'file_{0}'.format(target_node_id))
-            safe_filename = self._safe_name(name)
+            if not target_node:
+                return {'error': 'Không tìm thấy file khớp với "{0}" trong folder Mega.'.format(target_spec)}
 
+            s = target_node.get('s', 0)
             files = [{
-                'handle': target_node_id,
+                'handle': target_node.get('h', ''),
                 'name': safe_filename,
                 'size': s,
                 'size_human': self._human_size(s) if s else '',
