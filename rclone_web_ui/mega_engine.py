@@ -194,6 +194,34 @@ class MegaEngine:
             return sa_dir if sa_dir.endswith('/') else sa_dir + '/'
         return None
 
+    def _is_team_drive_target(self, destination):
+        """
+        Check if destination remote is a Shared Drive (Team Drive).
+        Google Service Accounts have 0 personal storage quota and can ONLY write to Shared Drives.
+        Writing to Personal My Drive with Service Accounts causes Google API to return 404 / 403 storageQuotaExceeded.
+        """
+        if not destination:
+            return False
+        remote_name = destination.split(':')[0] if ':' in destination else ''
+        if not remote_name:
+            return False
+        config_path = os.path.expanduser('~/.config/rclone/rclone.conf')
+        if not os.path.exists(config_path):
+            return False
+        try:
+            try:
+                import configparser
+            except ImportError:
+                import ConfigParser as configparser
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            if config.has_section(remote_name):
+                if config.has_option(remote_name, 'team_drive') and config.get(remote_name, 'team_drive').strip():
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _cmd_for_subprocess(self, cmd):
         if sys.getfilesystemencoding().lower() == 'ascii':
             return [arg.encode('utf-8') if isinstance(arg, str) else arg for arg in cmd]
@@ -210,10 +238,26 @@ class MegaEngine:
 
     def parse_url(self, url):
         """Parse mega URL into (type, id, key_a32).
-        type is 'folder' or 'file'.
+        type is 'folder', 'folder_file', or 'file'.
         """
         url = (url or '').strip()
         
+        # New folder format with specific file: mega.nz/folder/ID#KEY/file/NODE_ID
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#([^/]+)/file/([^/?#]+)', url, re.I)
+        if m:
+            folder_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            node_id = m.group(3)
+            return 'folder_file', (folder_id, node_id), self._str_to_a32(key_bytes)
+            
+        # Old folder format with specific file: mega.nz/#F!ID!KEY/file/NODE_ID
+        m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/#F!([^!]+)!([^/!]+)/file/([^/?#]+)', url, re.I)
+        if m:
+            folder_id = m.group(1)
+            key_bytes = self._b64_url_decode(m.group(2))
+            node_id = m.group(3)
+            return 'folder_file', (folder_id, node_id), self._str_to_a32(key_bytes)
+
         # New folder format: mega.nz/folder/ID#KEY
         m = re.match(r'https?://(?:www\.)?mega\.(?:nz|co\.nz|io)/folder/([^#]+)#(.+)', url, re.I)
         if m:
@@ -249,6 +293,8 @@ class MegaEngine:
         url_type, node_id, node_key = self.parse_url(url)
         if url_type == 'folder':
             return node_id, node_key
+        elif url_type == 'folder_file':
+            return node_id[0], node_key
         return None, None
 
     def get_folder_info(self, url):
@@ -299,6 +345,71 @@ class MegaEngine:
                 'file_count': 1,
                 'total_size': size,
                 'total_size_human': self._human_size(size),
+                'files': files,
+            }
+
+        if url_type == 'folder_file':
+            folder_id, target_node_id = node_id
+            try:
+                data = self._api_request({'a': 'f', 'c': 1, 'ca': 1, 'r': 1}, folder_id)
+            except Exception as e:
+                return {'error': 'Mega API lỗi: {0}'.format(str(e))}
+
+            if not isinstance(data, dict) or 'f' not in data:
+                return {'error': 'Mega API trả về dữ liệu không hợp lệ.'}
+
+            raw_nodes = data['f']
+            node_ids = {n.get('h') for n in raw_nodes if n.get('h')}
+            root_handle = None
+            for n in raw_nodes:
+                if n.get('t') == 2 or (n.get('p') not in node_ids):
+                    root_handle = n.get('h')
+                    break
+
+            target_node = next((n for n in raw_nodes if n.get('h') == target_node_id), None)
+            if not target_node:
+                return {'error': 'Không tìm thấy file trong folder Mega (ID: {0}).'.format(target_node_id)}
+
+            k_str = target_node.get('k', '')
+            a_str = target_node.get('a', '')
+            s = target_node.get('s', 0)
+            enc_key_b64 = ''
+            if k_str:
+                parts = k_str.split('/')
+                for part in parts:
+                    if ':' in part:
+                        h_part, k_part = part.split(':', 1)
+                        if h_part == root_handle:
+                            enc_key_b64 = k_part
+                            break
+                if not enc_key_b64:
+                    first_part = parts[0]
+                    enc_key_b64 = first_part.split(':', 1)[1] if ':' in first_part else first_part
+
+            enc_key_bytes = self._b64_url_decode(enc_key_b64)
+            enc_key_a32 = self._str_to_a32(enc_key_bytes)
+            node_key_dec = self._decrypt_key(enc_key_a32, node_key)
+            attrs = self._decrypt_attr(a_str, node_key_dec)
+            name = attrs.get('n', 'file_{0}'.format(target_node_id))
+            safe_filename = self._safe_name(name)
+
+            files = [{
+                'handle': target_node_id,
+                'name': safe_filename,
+                'size': s,
+                'size_human': self._human_size(s) if s else '',
+                'rel_dir': '',
+                'key_a32': node_key_dec,
+                'is_file_only': False,
+            }]
+            return {
+                'success': True,
+                'folder_name': safe_filename,
+                'folder_id': folder_id,
+                'folder_key': node_key,
+                'file_count': 1,
+                'total_size': s,
+                'total_size_human': self._human_size(s),
                 'files': files,
             }
 
@@ -505,9 +616,12 @@ class MegaEngine:
         cmd = [binary, "copy", local_path, dest, "--verbose", "--stats=1s", "--stats-one-line"]
         sa_dir = self._get_sa_dir()
         if sa_dir:
-            sa_count = len(glob.glob(os.path.join(sa_dir, '*.json')))
-            cmd.extend(["--drive-service-account-file-path", sa_dir])
-            self.log_callback(logging.INFO, "SA rotation enabled: {0} accounts".format(sa_count))
+            if self._is_team_drive_target(drive_dest):
+                sa_count = len(glob.glob(os.path.join(sa_dir, '*.json')))
+                cmd.extend(["--drive-service-account-file-path", sa_dir])
+                self.log_callback(logging.INFO, "SA rotation enabled: {0} accounts in {1} (Shared Drive target)".format(sa_count, sa_dir))
+            else:
+                self.log_callback(logging.INFO, "Destination is Personal Google Drive (My Drive). SA rotation disabled to prevent Google API 403/404 quota errors.")
 
         self.log_callback(logging.INFO, "Uploading to Google Drive: {0}".format(dest))
 
@@ -597,7 +711,7 @@ class MegaEngine:
                 binary = self._detect_binary()
                 cmd = [binary, "lsjson", "-R", "--files-only", dest]
                 sa_dir = self._get_sa_dir()
-                if sa_dir:
+                if sa_dir and self._is_team_drive_target(drive_dest):
                     cmd.extend(["--drive-service-account-file-path", sa_dir])
 
                 p = subprocess.Popen(
