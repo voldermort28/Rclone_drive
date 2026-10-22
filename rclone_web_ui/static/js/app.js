@@ -4116,6 +4116,9 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     if (useCloudDownload) {
         useCloudDownload.addEventListener('change', async () => {
+            try {
+                localStorage.setItem('gdrive_use_cloud_download', useCloudDownload.checked ? 'true' : 'false');
+            } catch (e) {}
             if (cloudDownloadNotice) {
                 cloudDownloadNotice.style.display = useCloudDownload.checked ? 'block' : 'none';
             }
@@ -4134,6 +4137,14 @@ window.addEventListener('DOMContentLoaded', async () => {
                 if (cloudDownloadGithubWarn) cloudDownloadGithubWarn.style.display = 'none';
             }
         });
+
+        // Restore saved preference
+        try {
+            if (localStorage.getItem('gdrive_use_cloud_download') === 'true') {
+                useCloudDownload.checked = true;
+                useCloudDownload.dispatchEvent(new Event('change'));
+            }
+        } catch (e) {}
     }
 
     window.startCloudDownload = async function(urls, destination, password) {

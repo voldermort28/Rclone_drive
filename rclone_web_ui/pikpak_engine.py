@@ -1185,8 +1185,8 @@ class PikPakEngine:
                 except Exception:
                     pass
             os.rename(part_io, final_io)
-            self._progress(50, "Tải về VPS thành công ({0})".format(self._human_size(downloaded)))
-            self.log_callback(logging.INFO, "Đã tải xong về VPS: {0}".format(safe_name))
+            self._progress(50, "Tải về hoàn tất ({0})".format(self._human_size(downloaded)))
+            self.log_callback(logging.INFO, "Đã tải xong: {0}".format(safe_name))
             return final_io
 
         except Exception as e:
@@ -1381,9 +1381,9 @@ class PikPakEngine:
                 saved_in_account = False
 
                 if local_path:
-                    self.log_callback(logging.INFO, "File đã tải đủ trên VPS, chuyển sang upload.")
+                    self.log_callback(logging.INFO, "File đã tải đủ trong bộ đệm tạm, chuyển sang upload.")
                 else:
-                    self.log_callback(logging.INFO, "BƯỚC 2/3: Lấy link và tải file về VPS...")
+                    self.log_callback(logging.INFO, "BƯỚC 2/3: Lấy link và tải file...")
                     self._emit_state(status='downloading', phase='download')
                     self._progress(2, "Đang giải mã link tải PikPak...")
 
