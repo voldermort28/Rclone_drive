@@ -17,6 +17,7 @@ import json
 import sys
 import hashlib
 import uuid
+import random
 
 try:
     from urllib.parse import urlparse, parse_qs, unquote
@@ -1342,6 +1343,16 @@ class PikPakEngine:
                 # If temporary file was auto-saved to user's PikPak cloud account, clean it up
                 if saved_in_account and item.get('file_id'):
                     self._cleanup_user_cloud_file(item.get('file_id'), config=config, access_token=access_token)
+
+                # Cooldown between files if there are more files to process
+                if index < total_items:
+                    delay = random.randint(15, 30)
+                    self.log_callback(logging.INFO,
+                        "⏳ Cooldown: Nghỉ {0} giây trước khi tải file tiếp theo (tránh nghẽn mạng & chống quét)...".format(delay))
+                    for _ in range(delay):
+                        if self.stop_checker() or self._stopped:
+                            return False
+                        time.sleep(1)
 
             self._progress_base = 0.0
             self._progress_span = 100.0

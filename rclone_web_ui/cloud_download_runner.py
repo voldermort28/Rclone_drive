@@ -141,6 +141,12 @@ def main():
         else:
             print("✅ Thành công xử lý mục: {0}".format(line))
 
+        if i < len(lines):
+            import random, time
+            delay = random.randint(15, 30)
+            print("\n⏳ Cooldown: Nghỉ {0} giây trước khi chuyển sang link tiếp theo...".format(delay))
+            time.sleep(delay)
+
     if overall_success:
         print("\n🎉 Tất cả tiến trình Cloud Download & Upload đã hoàn thành thành công!")
         sys.exit(0)
