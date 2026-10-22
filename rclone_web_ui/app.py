@@ -2296,6 +2296,13 @@ active_unpack_job = {
     'started_at': 0
 }
 
+active_cloud_download_job = {
+    'run_id': None,
+    'url': None,
+    'destination': None,
+    'started_at': 0
+}
+
 def _load_github_config():
     config = {'github_pat': '', 'github_repo': ''}
     if os.path.exists(GITHUB_CONFIG_FILE):
@@ -2491,6 +2498,180 @@ def cloud_unpack_reset():
     active_unpack_job['run_id'] = None
     active_unpack_job['remote_path'] = None
     active_unpack_job['started_at'] = 0
+    return jsonify({'success': True})
+
+
+# ==================== CLOUD DOWNLOAD (GITHUB ACTIONS) ====================
+
+@app.route('/api/cloud-download/start', methods=['POST'])
+def cloud_download_start():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get('url', '').strip()
+    destination = data.get('destination', '').strip()
+    password = data.get('password', '').strip()
+
+    if not url:
+        return jsonify({'success': False, 'error': 'Vui lòng nhập link nguồn cần tải.'})
+    if not destination:
+        return jsonify({'success': False, 'error': 'Vui lòng chọn thư mục Google Drive đích.'})
+
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+
+    if not pat or not repo:
+        return jsonify({'success': False, 'error': 'Chưa cấu hình GitHub Personal Access Token hoặc Repository trong tab Cấu hình.'})
+
+    conf_path = get_rclone_conf_path()
+    rclone_conf_b64 = ""
+    if os.path.exists(conf_path):
+        try:
+            with open(conf_path, 'rb') as f:
+                rclone_conf_b64 = base64.b64encode(f.read()).decode('utf-8')
+        except Exception as e:
+            return jsonify({'success': False, 'error': 'Lỗi đọc rclone.conf: {0}'.format(str(e))})
+
+    dispatch_url = "https://api.github.com/repos/{0}/dispatches".format(repo)
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer {0}".format(pat),
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    payload = {
+        "event_type": "cloud_download",
+        "client_payload": {
+            "url": url,
+            "destination": destination,
+            "file_password": password,
+            "rclone_conf": rclone_conf_b64
+        }
+    }
+
+    try:
+        resp = requests.post(dispatch_url, json=payload, headers=headers, timeout=15)
+        if resp.status_code == 204:
+            active_cloud_download_job['run_id'] = None
+            active_cloud_download_job['url'] = url
+            active_cloud_download_job['destination'] = destination
+            active_cloud_download_job['started_at'] = time.time()
+            return jsonify({'success': True, 'message': 'Đã gửi yêu cầu tải tới GitHub Actions máy ảo!'})
+        else:
+            return jsonify({'success': False, 'error': 'Lỗi GitHub API ({0}): {1}'.format(resp.status_code, resp.text)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': 'Lỗi kết nối GitHub: {0}'.format(str(e))})
+
+@app.route('/api/cloud-download/status', methods=['GET'])
+def cloud_download_status():
+    if not active_cloud_download_job['started_at']:
+        return jsonify({'status': 'idle'})
+
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+
+    if not pat or not repo:
+        return jsonify({'status': 'error', 'error': 'Chưa cấu hình GitHub'})
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer {0}".format(pat),
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+
+    # 1. If run_id is not yet resolved, query the latest workflow runs
+    if not active_cloud_download_job['run_id']:
+        url = "https://api.github.com/repos/{0}/actions/runs".format(repo)
+        params = {"event": "repository_dispatch", "per_page": 5}
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=12)
+            if resp.status_code == 200:
+                runs = resp.json().get('workflow_runs', [])
+                for run in runs:
+                    from datetime import datetime
+                    created_dt = datetime.strptime(run['created_at'], "%Y-%m-%dT%H:%M:%SZ")
+                    created_epoch = created_dt.timestamp()
+                    if created_epoch >= (active_cloud_download_job['started_at'] - 30):
+                        active_cloud_download_job['run_id'] = run['id']
+                        break
+            else:
+                return jsonify({'status': 'initializing', 'message': 'Đang kết nối tới GitHub Actions...'})
+        except Exception as e:
+            return jsonify({'status': 'initializing', 'message': 'Đang kết nối... ({0})'.format(str(e))})
+
+    if not active_cloud_download_job['run_id']:
+        if time.time() - active_cloud_download_job['started_at'] > 45:
+            active_cloud_download_job['started_at'] = 0
+            return jsonify({'status': 'idle', 'error': 'Không tìm thấy workflow khởi chạy trên GitHub. Vui lòng kiểm tra lại PAT hoặc Repo.'})
+        return jsonify({'status': 'initializing', 'message': 'Đang đợi GitHub khởi động máy ảo (70GB NVMe)...'})
+
+    # 2. Get Run status & steps
+    run_id = active_cloud_download_job['run_id']
+    run_url = "https://api.github.com/repos/{0}/actions/runs/{1}".format(repo, run_id)
+    jobs_url = "https://api.github.com/repos/{0}/actions/runs/{1}/jobs".format(repo, run_id)
+
+    try:
+        run_resp = requests.get(run_url, headers=headers, timeout=12)
+        jobs_resp = requests.get(jobs_url, headers=headers, timeout=12)
+
+        if run_resp.status_code == 200:
+            run_data = run_resp.json()
+            status = run_data.get('status')
+            conclusion = run_data.get('conclusion')
+
+            steps_data = []
+            if jobs_resp.status_code == 200:
+                for job in jobs_resp.json().get('jobs', []):
+                    for step in job.get('steps', []):
+                        steps_data.append({
+                            'name': step.get('name'),
+                            'status': step.get('status'),
+                            'conclusion': step.get('conclusion')
+                        })
+
+            return jsonify({
+                'status': status,
+                'conclusion': conclusion,
+                'url': active_cloud_download_job['url'],
+                'destination': active_cloud_download_job['destination'],
+                'steps': steps_data,
+                'html_url': run_data.get('html_url')
+            })
+        else:
+            return jsonify({'status': 'error', 'error': 'Lỗi API GitHub: {0}'.format(run_resp.text)})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+@app.route('/api/cloud-download/cancel', methods=['POST'])
+def cloud_download_cancel():
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+    run_id = active_cloud_download_job.get('run_id')
+
+    if pat and repo and run_id:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer {0}".format(pat),
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+        cancel_url = "https://api.github.com/repos/{0}/actions/runs/{1}/cancel".format(repo, run_id)
+        try:
+            requests.post(cancel_url, headers=headers, timeout=10)
+        except Exception:
+            pass
+
+    active_cloud_download_job['run_id'] = None
+    active_cloud_download_job['url'] = None
+    active_cloud_download_job['destination'] = None
+    active_cloud_download_job['started_at'] = 0
+    return jsonify({'success': True, 'message': 'Đã hủy tiến trình Cloud Download.'})
+
+@app.route('/api/cloud-download/reset', methods=['POST'])
+def cloud_download_reset():
+    active_cloud_download_job['run_id'] = None
+    active_cloud_download_job['url'] = None
+    active_cloud_download_job['destination'] = None
+    active_cloud_download_job['started_at'] = 0
     return jsonify({'success': True})
 
 

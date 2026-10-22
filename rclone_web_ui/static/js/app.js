@@ -100,6 +100,13 @@ downloadBtn.addEventListener('click', async () => {
         const filePasswordInput = document.getElementById('file_password');
         const filePassword = filePasswordInput ? filePasswordInput.value.trim() : '';
 
+        // If user enabled Cloud Download (GitHub Actions)
+        const useCloud = document.getElementById('useCloudDownload');
+        if (useCloud && useCloud.checked) {
+            await startCloudDownload(rawUrls, outputDir, filePassword);
+            return;
+        }
+
         // Send raw URLs to backend (backend will parse gc:ID and scrape titles)
         const wrapCheckbox = document.getElementById('wrapParentFolder');
         const payloadData = {
@@ -4088,4 +4095,227 @@ window.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => {
         checkUnpackStatus();
     }, 1000);
+
+    // ==================== CLOUD DOWNLOAD (GITHUB ACTIONS) ====================
+    const useCloudDownload = document.getElementById('useCloudDownload');
+    const cloudDownloadNotice = document.getElementById('cloudDownloadNotice');
+    const cloudDownloadGithubWarn = document.getElementById('cloudDownloadGithubWarn');
+    const cloudDownloadStatusSection = document.getElementById('cloudDownloadStatusSection');
+    const cloudStatusTitleText = document.getElementById('cloudStatusTitleText');
+    const cloudSpinner = document.getElementById('cloudSpinner');
+    const cloudSourceText = document.getElementById('cloudSourceText');
+    const cloudDestText = document.getElementById('cloudDestText');
+    const cloudGithubLink = document.getElementById('cloudGithubLink');
+    const btnCancelCloudDownload = document.getElementById('btnCancelCloudDownload');
+    const cloudProgressBar = document.getElementById('cloudProgressBar');
+    const cloudStatusMsg = document.getElementById('cloudStatusMsg');
+    const cloudTimeElapsed = document.getElementById('cloudTimeElapsed');
+    const cloudTimeline = document.getElementById('cloudTimeline');
+    let cloudDownloadPollTimer = null;
+    let cloudJobStartTime = null;
+
+    if (useCloudDownload) {
+        useCloudDownload.addEventListener('change', async () => {
+            if (cloudDownloadNotice) {
+                cloudDownloadNotice.style.display = useCloudDownload.checked ? 'block' : 'none';
+            }
+            if (useCloudDownload.checked) {
+                downloadBtn.querySelector('.btn-text').textContent = "⚡ Bắt đầu Tải qua GitHub Actions (Cloud Transfer)";
+                // Verify GitHub config
+                try {
+                    const r = await fetch('/api/github/config');
+                    const data = await r.json();
+                    if (cloudDownloadGithubWarn) {
+                        cloudDownloadGithubWarn.style.display = data.complete ? 'none' : 'block';
+                    }
+                } catch (e) {}
+            } else {
+                downloadBtn.querySelector('.btn-text').textContent = "Thêm vào Queue (Copy)";
+                if (cloudDownloadGithubWarn) cloudDownloadGithubWarn.style.display = 'none';
+            }
+        });
+    }
+
+    window.startCloudDownload = async function(urls, destination, password) {
+        // 1. Verify GitHub configuration first
+        try {
+            const cfgRes = await fetch('/api/github/config');
+            const cfgData = await cfgRes.json();
+            if (!cfgData.complete) {
+                alert('Chưa cấu hình GitHub Personal Access Token hoặc Repository!\nVui lòng vào tab Cấu hình (nhấp 3 lần vào logo) để thiết lập trước khi dùng tính năng Cloud Download.');
+                const tabBtnConfig = document.getElementById('tabBtnConfig');
+                if (tabBtnConfig) {
+                    tabBtnConfig.style.display = 'inline-flex';
+                    tabBtnConfig.click();
+                }
+                return;
+            }
+        } catch (e) {
+            alert('Không thể kiểm tra cấu hình GitHub: ' + e);
+            return;
+        }
+
+        const oldText = downloadBtn.querySelector('.btn-text').textContent;
+        downloadBtn.querySelector('.btn-text').textContent = "Đang gửi yêu cầu tới GitHub...";
+        downloadBtn.disabled = true;
+
+        try {
+            const resp = await fetch('/api/cloud-download/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: urls,
+                    destination: destination,
+                    password: password
+                })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                alert(data.message || 'Đã gửi yêu cầu tải sang GitHub Actions!');
+                urlInput.value = '';
+                const pwInput = document.getElementById('file_password');
+                if (pwInput) pwInput.value = '';
+                cloudJobStartTime = Date.now();
+                checkCloudDownloadStatus();
+            } else {
+                alert('Lỗi: ' + (data.error || 'Không thể khởi động Cloud Download'));
+            }
+        } catch (e) {
+            alert('Lỗi kết nối khi gửi yêu cầu: ' + e);
+        } finally {
+            downloadBtn.disabled = false;
+            if (useCloudDownload && useCloudDownload.checked) {
+                downloadBtn.querySelector('.btn-text').textContent = "⚡ Bắt đầu Tải qua GitHub Actions (Cloud Transfer)";
+            } else {
+                downloadBtn.querySelector('.btn-text').textContent = "Thêm vào Queue (Copy)";
+            }
+        }
+    };
+
+    if (btnCancelCloudDownload) {
+        btnCancelCloudDownload.addEventListener('click', async () => {
+            if (confirm('Bạn có chắc muốn hủy hoặc dừng theo dõi tiến trình Cloud Download này không?')) {
+                try {
+                    await fetch('/api/cloud-download/cancel', { method: 'POST' });
+                    await fetch('/api/cloud-download/reset', { method: 'POST' });
+                    if (cloudDownloadPollTimer) clearTimeout(cloudDownloadPollTimer);
+                    if (cloudDownloadStatusSection) cloudDownloadStatusSection.style.display = 'none';
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        });
+    }
+
+    async function checkCloudDownloadStatus() {
+        if (cloudDownloadPollTimer) clearTimeout(cloudDownloadPollTimer);
+
+        try {
+            const r = await fetch('/api/cloud-download/status');
+            const data = await r.json();
+
+            if (!data.status || data.status === 'idle') {
+                if (cloudDownloadStatusSection) cloudDownloadStatusSection.style.display = 'none';
+                return;
+            }
+
+            if (cloudDownloadStatusSection) cloudDownloadStatusSection.style.display = 'block';
+            if (cloudSourceText) cloudSourceText.textContent = data.url || '...';
+            if (cloudDestText) cloudDestText.textContent = data.destination || '...';
+
+            if (cloudGithubLink && data.html_url) {
+                cloudGithubLink.href = data.html_url;
+                cloudGithubLink.style.display = 'flex';
+            } else if (cloudGithubLink) {
+                cloudGithubLink.style.display = 'none';
+            }
+
+            // Elapsed time calculation
+            if (cloudJobStartTime && cloudTimeElapsed) {
+                const diffSec = Math.floor((Date.now() - cloudJobStartTime) / 1000);
+                const m = Math.floor(diffSec / 60);
+                const s = diffSec % 60;
+                cloudTimeElapsed.textContent = `${m}m ${s < 10 ? '0' : ''}${s}s`;
+            }
+
+            let statusLabel = '⚡ Đang chạy trên GitHub Actions...';
+            let pct = 20;
+
+            if (data.status === 'queued') {
+                statusLabel = '⏳ Đang chờ máy ảo GitHub (Queued)...';
+                if (cloudStatusMsg) cloudStatusMsg.textContent = 'Máy ảo đang được xếp hàng khởi động...';
+                pct = 15;
+            } else if (data.status === 'initializing') {
+                statusLabel = '⚡ Đang khởi động máy ảo...';
+                if (cloudStatusMsg) cloudStatusMsg.textContent = data.message || 'Đang kết nối tới GitHub...';
+                pct = 25;
+            } else if (data.status === 'in_progress') {
+                statusLabel = '🌀 Đang xử lý tải file & upload lên Google Drive...';
+                if (cloudStatusMsg) cloudStatusMsg.textContent = 'Máy ảo GitHub (70GB+ NVMe SSD) đang thực thi...';
+                pct = 60;
+            } else if (data.status === 'completed') {
+                if (data.conclusion === 'success') {
+                    statusLabel = '✅ Hoàn thành tải & upload lên Google Drive!';
+                    if (cloudStatusMsg) cloudStatusMsg.textContent = 'Đã tải xong toàn bộ và lưu vào Google Drive an toàn.';
+                    pct = 100;
+                    if (cloudSpinner) cloudSpinner.style.display = 'none';
+                    if (cloudProgressBar) cloudProgressBar.style.background = '#10b981';
+                } else {
+                    statusLabel = '❌ Lỗi hoặc bị hủy bỏ (' + (data.conclusion || 'Failed') + ')';
+                    if (cloudStatusMsg) cloudStatusMsg.textContent = 'Tiến trình trên GitHub bị lỗi. Nhấp "Xem GitHub Actions" để xem chi tiết log.';
+                    pct = 100;
+                    if (cloudSpinner) cloudSpinner.style.display = 'none';
+                    if (cloudProgressBar) cloudProgressBar.style.background = '#ef4444';
+                }
+            }
+
+            if (cloudStatusTitleText) cloudStatusTitleText.textContent = statusLabel;
+            if (cloudProgressBar) cloudProgressBar.style.width = pct + '%';
+
+            // Generate timeline steps
+            if (cloudTimeline) {
+                if (data.steps && data.steps.length > 0) {
+                    cloudTimeline.innerHTML = '';
+                    data.steps.forEach(step => {
+                        const stepDiv = document.createElement('div');
+                        stepDiv.className = 'timeline-step ' + (step.status || 'queued');
+                        if (step.status === 'completed' && step.conclusion === 'failure') {
+                            stepDiv.className = 'timeline-step failed';
+                        }
+
+                        const titleSpan = document.createElement('div');
+                        titleSpan.style.fontWeight = '500';
+                        titleSpan.textContent = step.name;
+                        stepDiv.appendChild(titleSpan);
+
+                        const descDiv = document.createElement('div');
+                        descDiv.className = 'step-details';
+                        let desc = 'Đang chờ...';
+                        if (step.status === 'in_progress') desc = '⚡ Đang xử lý...';
+                        else if (step.status === 'completed') {
+                            desc = step.conclusion === 'success' ? '✅ Đã hoàn thành' : '❌ Lỗi xảy ra';
+                        }
+                        descDiv.textContent = desc;
+                        stepDiv.appendChild(descDiv);
+
+                        cloudTimeline.appendChild(stepDiv);
+                    });
+                } else {
+                    cloudTimeline.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">⏳ Đang khởi tạo các bước chạy trên máy ảo GitHub...</div>';
+                }
+            }
+
+            if (data.status !== 'completed') {
+                cloudDownloadPollTimer = setTimeout(checkCloudDownloadStatus, 3500);
+            }
+        } catch (e) {
+            console.error('Lỗi kiểm tra trạng thái Cloud Download:', e);
+            cloudDownloadPollTimer = setTimeout(checkCloudDownloadStatus, 6000);
+        }
+    }
+
+    // Auto-check on page load
+    setTimeout(() => {
+        checkCloudDownloadStatus();
+    }, 1500);
 })();

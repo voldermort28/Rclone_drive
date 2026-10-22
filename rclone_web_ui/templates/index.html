@@ -144,6 +144,22 @@
                     <input type="password" id="file_password" placeholder="Để trống nếu file không có mật khẩu" autocomplete="new-password">
                 </div>
 
+                <div class="input-group" style="margin-top: 14px; margin-bottom: 16px;">
+                    <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 0.92rem; color: #38bdf8; cursor: pointer; font-weight: 500;">
+                        <input type="checkbox" id="useCloudDownload">
+                        <span>⚡ Tải qua GitHub Actions (Không tốn ổ cứng VPS, thích hợp file &gt; 6GB)</span>
+                    </label>
+                    <div id="cloudDownloadNotice" style="display: none; margin-top: 8px; padding: 12px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.85rem; color: #94a3b8; line-height: 1.5;">
+                        <div style="display: flex; align-items: center; gap: 6px; color: #38bdf8; font-weight: 600; margin-bottom: 4px;">
+                            <span>☁️ Cloud Download (GitHub Actions):</span>
+                        </div>
+                        <div>File sẽ được kéo trực tiếp về máy ảo GitHub (<strong>70GB+ NVMe SSD, mạng 10Gbps</strong>), sau đó tải thẳng lên Google Drive. <strong>VPS của bạn tốn 0 MB ổ cứng!</strong></div>
+                        <div id="cloudDownloadGithubWarn" style="display: none; margin-top: 8px; padding: 6px 10px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; color: #f87171; font-size: 0.82rem;">
+                            ⚠️ Chưa cấu hình GitHub PAT hoặc Repository. Vui lòng vào tab <strong>Cấu hình</strong> để lưu thông tin trước khi dùng.
+                        </div>
+                    </div>
+                </div>
+
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button id="downloadBtn" class="btn-primary" style="flex: 2; min-width: 180px;">
                         <span class="btn-text">Thêm vào Queue (Copy)</span>
@@ -206,6 +222,51 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+            </section>
+
+            <!-- Cloud Download Status Section (GitHub Actions) -->
+            <section class="card status-section" id="cloudDownloadStatusSection" style="display: none; margin-top: 20px; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 4px 20px rgba(56, 189, 248, 0.1);">
+                <div class="status-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                    <div>
+                        <h3 id="cloudStatusTitle" style="color: #38bdf8; display: flex; align-items: center; gap: 8px;">
+                            <span class="loading-spinner" id="cloudSpinner" style="width: 16px; height: 16px; border: 2px solid rgba(56, 189, 248, 0.3); border-top-color: #38bdf8; border-radius: 50%; display: inline-block; animation: spin 1s linear infinite;"></span>
+                            <span id="cloudStatusTitleText">⚡ Đang tải qua GitHub Actions...</span>
+                        </h3>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 6px; word-break: break-all;">
+                            Nguồn: <span id="cloudSourceText" style="color: var(--text-color);">...</span>
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 3px;">
+                            Đích: <strong id="cloudDestText" style="color: #10b981;">...</strong>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <a id="cloudGithubLink" href="#" target="_blank" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px; border-color: #38bdf8; color: #38bdf8; text-decoration: none;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                <polyline points="15 3 21 3 21 9" />
+                                <line x1="10" y1="14" x2="21" y2="3" />
+                            </svg> Xem GitHub Actions
+                        </a>
+                        <button id="btnCancelCloudDownload" type="button" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; border-color: #ef4444; color: #ef4444;">
+                            Hủy / Đóng
+                        </button>
+                    </div>
+                </div>
+
+                <div class="progress-container" style="margin-top: 18px;">
+                    <div class="progress-bar-bg" style="height: 10px; background: rgba(255,255,255,0.06); border-radius: 5px; overflow: hidden;">
+                        <div class="progress-bar-fill" id="cloudProgressBar" style="height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8); width: 10%; transition: width 0.4s ease;"></div>
+                    </div>
+                    <div class="progress-info" style="display: flex; justify-content: space-between; margin-top: 6px;">
+                        <span id="cloudStatusMsg" style="font-size: 0.85rem; color: #94a3b8;">Đang kết nối tới máy ảo GitHub Actions...</span>
+                        <span id="cloudTimeElapsed" style="font-size: 0.85rem; color: var(--text-muted);"></span>
+                    </div>
+                </div>
+
+                <!-- Timeline Steps -->
+                <div class="unpack-timeline" id="cloudTimeline" style="margin-top: 20px; display: flex; flex-direction: column; gap: 10px;">
+                    <!-- Steps will be generated here -->
                 </div>
             </section>
         </div>

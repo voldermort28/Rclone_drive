@@ -1,0 +1,103 @@
+name: Cloud Download & Transfer
+
+on:
+  repository_dispatch:
+    types: [cloud_download]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Source URL (PikPak, Mega, Terabox, Fshare, Direct URL...)'
+        required: true
+      destination:
+        description: 'Google Drive destination (e.g. gc:FIM/Uncen)'
+        required: true
+        default: 'gc:'
+      file_password:
+        description: 'File / Share password (optional)'
+        required: false
+        default: ''
+
+jobs:
+  cloud_transfer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space
+        run: |
+          echo "=== Disk space before clean ==="
+          df -h
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /usr/share/swift || true
+          sudo rm -rf /usr/local/graalvm || true
+          sudo rm -rf /usr/local/share/powershell || true
+          sudo rm -rf /usr/lib/jvm || true
+          sudo rm -rf /opt/hostedtoolcache || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/lib/node_modules || true
+          sudo rm -rf /usr/local/share/chrome-driver || true
+          sudo rm -rf /usr/local/share/chromedriver-linux64 || true
+          sudo rm -rf /usr/local/share/gecko-driver || true
+          sudo rm -rf /usr/local/share/selenium || true
+          sudo rm -rf /etc/mysql || true
+          sudo rm -rf /var/lib/mysql || true
+          sudo systemctl stop docker || true
+          sudo rm -rf /var/lib/docker || true
+          sudo rm -rf /etc/docker || true
+          sudo docker system prune --all --volumes --force || true
+          sudo apt-get autoremove -y || true
+          sudo apt-get clean || true
+          echo "=== Disk space after clean (70GB+ free!) ==="
+          df -h
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies & Gclone
+        run: |
+          echo "=== Installing Python Dependencies ==="
+          pip install --no-cache-dir requests urllib3
+          
+          echo "=== Installing Gclone ==="
+          curl -L -o gclone.zip https://github.com/dogbutcat/gclone/releases/download/v1.71.0-mod1.6.2/gclone-v1.71.0-mod1.6.2-linux-amd64.zip
+          unzip -q gclone.zip
+          GCLONE_BIN=$(find . -name "gclone" -type f)
+          chmod +x "$GCLONE_BIN"
+          sudo mv "$GCLONE_BIN" /usr/bin/gclone
+          sudo ln -sf /usr/bin/gclone /usr/bin/rclone
+          rm -rf gclone.zip gclone-v*
+
+      - name: Setup Rclone Configuration
+        run: |
+          mkdir -p ~/.config/rclone
+          RCLONE_B64="${{ github.event.client_payload.rclone_conf || secrets.RCLONE_CONF }}"
+          if [ -n "$RCLONE_B64" ]; then
+            echo "$RCLONE_B64" | base64 --decode > ~/.config/rclone/rclone.conf
+            echo "Rclone config installed successfully."
+            rclone listremotes || true
+          else
+            echo "⚠️ Warning: No rclone_conf provided!"
+          fi
+
+      - name: Execute Cloud Download & Upload
+        run: |
+          set -e
+          
+          URL="${{ github.event.client_payload.url || github.event.inputs.url }}"
+          DEST="${{ github.event.client_payload.destination || github.event.inputs.destination }}"
+          PASS="${{ github.event.client_payload.file_password || github.event.inputs.file_password }}"
+          
+          echo "=== Starting Cloud Download Job ==="
+          echo "Destination: $DEST"
+          
+          python3 rclone_web_ui/cloud_download_runner.py \
+            --url "$URL" \
+            --dest "$DEST" \
+            --password "$PASS"
