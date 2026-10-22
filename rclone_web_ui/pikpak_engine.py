@@ -220,7 +220,7 @@ class PikPakEngine:
         return existing
 
     def _find_completed_in_dir(self, tmp_dir, expected_size, file_name):
-        """Find a completed (non-.part) file in tmp_dir matching expected_size."""
+        """Find a completed (non-.part) file in tmp_dir matching expected_size (or >=45% for files >=6GB)."""
         try:
             tmp_io = self._path_for_io(tmp_dir)
             if not os.path.isdir(tmp_io):
@@ -229,7 +229,9 @@ class PikPakEngine:
             target_path = os.path.join(tmp_dir, safe_name)
             target_path_io = self._path_for_io(target_path)
             if os.path.isfile(target_path_io) and expected_size > 0:
-                if os.path.getsize(target_path_io) == expected_size:
+                sz = os.path.getsize(target_path_io)
+                LIMIT_6GB = 6 * 1024 * 1024 * 1024
+                if sz == expected_size or (expected_size >= LIMIT_6GB and sz >= int(0.45 * expected_size)):
                     return target_path_io
         except Exception:
             pass
@@ -965,18 +967,47 @@ class PikPakEngine:
             if file_spec and line_items:
                 spec_clean = file_spec.strip()
                 filtered = []
-                if spec_clean.isdigit():
+                LIMIT_6GB = 6 * 1024 * 1024 * 1024
+                spec_lower = spec_clean.lower()
+
+                if spec_lower in ['under6gb', 'under6g', '<6gb', '<6g', 'free', 'small', 'duoi6gb']:
+                    filtered = [it for it in line_items if it.get('file_size', 0) < LIMIT_6GB]
+                    self.log_callback(logging.INFO,
+                        "Đã lọc các file dưới 6GB (gói PikPak Free): tìm thấy {0}/{1} file.".format(len(filtered), len(line_items)))
+                elif spec_lower in ['over6gb', 'over6g', '>6gb', '>6g', 'large', 'tren6gb']:
+                    filtered = [it for it in line_items if it.get('file_size', 0) >= LIMIT_6GB]
+                    self.log_callback(logging.INFO,
+                        "Đã lọc các file từ 6GB trở lên: tìm thấy {0}/{1} file.".format(len(filtered), len(line_items)))
+                elif spec_clean.isdigit():
                     idx = int(spec_clean)
                     if 1 <= idx <= len(line_items):
                         filtered = [line_items[idx - 1]]
                         self.log_callback(logging.INFO,
                             "Đã chọn file #{0}: {1}".format(idx, filtered[0]['file_name']))
-                elif spec_clean.lower() in ['first', 'test', 'sample', '1st']:
+                elif spec_lower in ['first', 'test', 'sample', '1st']:
                     filtered = [line_items[0]]
                     self.log_callback(logging.INFO,
                         "Đã chọn file đầu tiên để test: {0}".format(filtered[0]['file_name']))
+                elif ',' in spec_clean or '-' in spec_clean:
+                    chosen_indices = set()
+                    for part in spec_clean.split(','):
+                        part = part.strip()
+                        if '-' in part:
+                            rng = part.split('-')
+                            if len(rng) == 2 and rng[0].strip().isdigit() and rng[1].strip().isdigit():
+                                start, end = int(rng[0].strip()), int(rng[1].strip())
+                                for x in range(start, end + 1):
+                                    if 1 <= x <= len(line_items):
+                                        chosen_indices.add(x - 1)
+                        elif part.isdigit():
+                            x = int(part)
+                            if 1 <= x <= len(line_items):
+                                chosen_indices.add(x - 1)
+                    if chosen_indices:
+                        filtered = [line_items[i] for i in sorted(chosen_indices)]
+                        self.log_callback(logging.INFO,
+                            "Đã chọn {0} file theo danh sách chỉ số ({1})".format(len(filtered), spec_clean))
                 else:
-                    spec_lower = spec_clean.lower()
                     for it in line_items:
                         if it.get('file_id') == spec_clean or spec_lower in (it.get('file_name') or '').lower():
                             filtered.append(it)
@@ -1117,8 +1148,13 @@ class PikPakEngine:
                         last_progress_time = now
                         last_downloaded = downloaded
 
-            # Strict file size verification: prevent truncated/corrupted files from being reported as success
-            if file_size > 0 and downloaded < file_size:
+            # File size verification
+            LIMIT_6GB = 6 * 1024 * 1024 * 1024
+            # If file >= 6GB, PikPak limits anonymous/free stream to ~55%.
+            # We accept partial >= 45% as a valid playable MP4 preview file.
+            is_acceptable_partial = (file_size >= LIMIT_6GB and downloaded >= int(0.45 * file_size))
+
+            if file_size > 0 and downloaded < file_size and not is_acceptable_partial:
                 pct = int(downloaded * 100.0 / file_size)
                 err_msg = (
                     "File tải về chưa đủ dung lượng: {0} / {1} ({2}%). "
@@ -1134,6 +1170,14 @@ class PikPakEngine:
                 except Exception:
                     pass
                 return None
+
+            if is_acceptable_partial and downloaded < file_size:
+                pct = int(downloaded * 100.0 / file_size)
+                self.log_callback(logging.INFO,
+                    "File lớn hơn 6 GB: Đã tải luồng preview {0} / {1} ({2}%). File MP4 hoàn chỉnh và sẵn sàng upload.".format(
+                        self._human_size(downloaded), self._human_size(file_size), pct
+                    )
+                )
 
             if os.path.exists(final_io):
                 try:
@@ -1306,7 +1350,18 @@ class PikPakEngine:
                     check_path = display_name
                 check_path = check_path.replace('\\', '/').strip('/')
 
-                if item_size > 0 and ((check_path, item_size) in existing_files or (display_name, item_size) in existing_files):
+                LIMIT_6GB = 6 * 1024 * 1024 * 1024
+                is_on_gdrive = False
+                if item_size > 0:
+                    if (check_path, item_size) in existing_files or (display_name, item_size) in existing_files:
+                        is_on_gdrive = True
+                    elif item_size >= LIMIT_6GB:
+                        for ex_name, ex_sz in existing_files:
+                            if (ex_name == check_path or ex_name == display_name) and ex_sz >= int(0.45 * item_size):
+                                is_on_gdrive = True
+                                break
+
+                if is_on_gdrive:
                     self.log_callback(logging.INFO, "Đã có trên Google Drive, skip: {0}".format(check_path))
                     self._progress(100, "Skipped (đã có trên GDrive)")
                     continue
