@@ -2254,18 +2254,35 @@ def _load_pikpak_config(include_secret=True):
 
 def _save_pikpak_config(data):
     current = _load_pikpak_config(include_secret=True)
+    extracted_from_json = False
     for key in ['username', 'password', 'refresh_token']:
         if key in data:
             val = (data.get(key) or '').strip()
             if key in ('password', 'refresh_token') and val == '__KEEP__':
                 continue
+            # If user pasted the whole JSON from credentials_...
+            if key == 'refresh_token' and val.startswith('{') and val.endswith('}'):
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, dict):
+                        if parsed.get('refresh_token'):
+                            current['refresh_token'] = str(parsed['refresh_token']).strip()
+                        if parsed.get('access_token'):
+                            current['access_token'] = str(parsed['access_token']).strip()
+                            current['access_token_expiry'] = time.time() + int(parsed.get('expires_in', 3600) or 3600)
+                            extracted_from_json = True
+                        continue
+                except Exception:
+                    pass
             current[key] = val
     if 'password' in data and data['password'] != '__KEEP__':
-        current['access_token'] = ''
-        current['access_token_expiry'] = 0
+        if not extracted_from_json:
+            current['access_token'] = ''
+            current['access_token_expiry'] = 0
     if 'refresh_token' in data and data['refresh_token'] != '__KEEP__':
-        current['access_token'] = ''
-        current['access_token_expiry'] = 0
+        if not extracted_from_json:
+            current['access_token'] = ''
+            current['access_token_expiry'] = 0
     with open(PIKPAK_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(current, f, ensure_ascii=False)
     return current
