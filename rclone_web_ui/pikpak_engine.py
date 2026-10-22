@@ -35,9 +35,25 @@ class PikPakEngine:
 
     API_BASE = "https://api-drive.mypikpak.com/drive/v1"
     API_FALLBACK = "https://api-drive.mypikpak.net/drive/v1"
+    USER_BASE = "https://user.mypikpak.com/v1"
+    USER_FALLBACK = "https://user.mypikpak.net/v1"
     AUTH_BASE = "https://user.mypikpak.com/v1/auth"
     AUTH_FALLBACK = "https://user.mypikpak.net/v1/auth"
     DEFAULT_CLIENT_ID = "YvtoWO6GNHiuCl7x"
+    WEB_CLIENT_ID = "YUMx5nI8ZU8Ap8pm"
+    WEB_PACKAGE_NAME = "drive.mypikpak.com"
+    SHIELD_SALTS = [
+        "fyZ4+p77W1U4zcWBUwefAIFhFxvADWtT1wzolCxhg9q7etmGUjXr",
+        "uSUX02HYJ1IkyLdhINEFcCf7l2",
+        "iWt97bqD/qvjIaPXB2Ja5rsBWtQtBZZmaHH2rMR41",
+        "3binT1s/5a1pu3fGsN",
+        "8YCCU+AIr7pg+yd7CkQEY16lDMwi8Rh4WNp5",
+        "DYS3StqnAEKdGddRP8CJrxUSFh",
+        "crquW+4",
+        "ryKqvW9B9hly+JAymXCIfag5Z",
+        "Hr08T/NDTX1oSJfHk90c",
+        "i"
+    ]
     CHUNK_SIZE = 1024 * 1024  # 1MB chunk size
     PROGRESS_THROTTLE = 2  # seconds between progress updates
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
@@ -54,6 +70,9 @@ class PikPakEngine:
         self._last_error = ''
         self._progress_base = 0.0
         self._progress_span = 100.0
+        self._shield_device_id = uuid.uuid4().hex
+        self._cached_captcha_token = None
+        self._cached_captcha_expiry = 0
 
     def _emit_state(self, **kwargs):
         """Send structured state back to Flask without coupling engine to app.py."""
@@ -250,30 +269,35 @@ class PikPakEngine:
 
     def _parse_url(self, raw_url):
         """
-        Extract share_id, parent_id (if subfolder), and pass_code from PikPak URL.
+        Extract share_id, parent_id, pass_code, and file_spec (keyword, index, or node ID) from PikPak URL.
         Supported formats:
         - https://mypikpak.com/s/VNxxxxxx
         - https://mypikpak.com/s/VNxxxxxx/folder_id
-        - https://mypikpak.com/drive/s/VNxxxxxx
-        - https://mypikpak.com/drive/s/VNxxxxxx/folder_id
-        - https://pikpak.me/s/...
-        - https://mypikpak.net/s/...
-        - Query parameters ?pwd=xxxx or ?pass_code=xxxx
+        - https://mypikpak.com/s/VNxxxxxx#1 or #KEYWORD
+        - https://mypikpak.com/s/VNxxxxxx/file/1 or /file/KEYWORD
+        - Query parameters ?pwd=xxxx, ?pass_code=xxxx, ?file=KEYWORD
         """
         url = (raw_url or '').strip()
         if not url:
-            return None, None, ''
+            return None, None, '', ''
 
         pwd = ''
+        file_spec = ''
         query_share_id = ''
         query_parent_id = ''
         try:
             parsed = urlparse(url)
+            if parsed.fragment:
+                file_spec = unquote(parsed.fragment).strip()
             qs = parse_qs(parsed.query)
             if 'pwd' in qs:
                 pwd = qs['pwd'][0].strip()
             elif 'pass_code' in qs:
                 pwd = qs['pass_code'][0].strip()
+            if 'file' in qs:
+                file_spec = qs['file'][0].strip()
+            elif 'filter' in qs:
+                file_spec = qs['filter'][0].strip()
             if 'share_id' in qs:
                 query_share_id = qs['share_id'][0].strip()
             elif 'id' in qs:
@@ -283,23 +307,29 @@ class PikPakEngine:
         except Exception:
             pass
 
-        if query_share_id:
-            return query_share_id, query_parent_id, pwd
-
         url_clean = url.split('?')[0].split('#')[0].rstrip('/')
+
+        # Check /file/SPEC in url path
+        m_file = re.search(r'/file/(.+)$', url_clean)
+        if m_file:
+            file_spec = unquote(m_file.group(1)).strip()
+            url_clean = url_clean[:m_file.start()].rstrip('/')
+
+        if query_share_id:
+            return query_share_id, query_parent_id, pwd, file_spec
 
         # Check /s/{share_id}/{parent_id} or /drive/s/{share_id}/{parent_id}
         m = re.search(r'/(?:s|drive/s)/([A-Za-z0-9_-]+)(?:/([A-Za-z0-9_-]+))?', url_clean)
         if m:
             share_id = m.group(1)
             parent_id = m.group(2) or ''
-            return share_id, parent_id, pwd
+            return share_id, parent_id, pwd, file_spec
 
         # Match raw share_id length 6-32
         if re.match(r'^[A-Za-z0-9_-]{6,32}$', url_clean):
-            return url_clean, '', pwd
+            return url_clean, '', pwd, file_spec
 
-        return None, None, pwd
+        return None, None, pwd, file_spec
 
     def _get_device_id(self, config):
         """Get or generate a persistent device ID."""
@@ -310,13 +340,89 @@ class PikPakEngine:
             device_id = hashlib.md5(str(uuid.getnode()).encode('utf-8')).hexdigest()
         return device_id
 
-    def _get_headers(self, config=None, access_token=None):
-        """Build standard headers required by PikPak backend."""
-        client_id = self.DEFAULT_CLIENT_ID
-        if isinstance(config, dict) and config.get('client_id'):
-            client_id = config.get('client_id')
+    def _compute_captcha_sign(self, client_id, client_version, package_name, device_id, timestamp):
+        """Compute reverse-engineered PikPak multi-stage MD5 salt signature."""
+        s = "{0}{1}{2}{3}{4}".format(client_id, client_version, package_name, device_id, timestamp)
+        current = s
+        for salt in self.SHIELD_SALTS:
+            current = hashlib.md5((current + salt).encode('utf-8')).hexdigest()
+        return "1." + current
 
-        device_id = self._get_device_id(config)
+    def _get_shield_captcha_token(self):
+        """
+        Dynamically obtain a valid PikPak captcha_token via reverse-engineered shield API.
+        Caches token for 4 minutes to minimize network roundtrips.
+        """
+        now = time.time()
+        cached = getattr(self, '_cached_captcha_token', None)
+        expiry = getattr(self, '_cached_captcha_expiry', 0)
+        if cached and expiry > (now + 30):
+            return cached
+
+        if requests is None:
+            return None
+
+        device_id = getattr(self, '_shield_device_id', None)
+        if not device_id:
+            device_id = uuid.uuid4().hex
+            self._shield_device_id = device_id
+
+        timestamp = str(int(now * 1000))
+        captcha_sign = self._compute_captcha_sign(
+            self.WEB_CLIENT_ID, "undefined", self.WEB_PACKAGE_NAME, device_id, timestamp
+        )
+        device_sign = "wdi10." + device_id + ("x" * 32)
+
+        headers = {
+            "User-Agent": self.USER_AGENT,
+            "x-client-id": self.WEB_CLIENT_ID,
+            "x-device-id": device_id,
+            "x-device-sign": device_sign,
+            "Content-Type": "application/json;charset=utf-8"
+        }
+        body = {
+            "client_id": self.WEB_CLIENT_ID,
+            "action": "POST:/config/v1/activity_operation",
+            "device_id": device_id,
+            "meta": {
+                "captcha_sign": captcha_sign,
+                "client_version": "undefined",
+                "package_name": self.WEB_PACKAGE_NAME,
+                "user_id": "",
+                "timestamp": timestamp
+            }
+        }
+
+        urls = [
+            "{0}/shield/captcha/init".format(self.USER_BASE),
+            "{0}/shield/captcha/init".format(self.USER_FALLBACK)
+        ]
+        for u in urls:
+            try:
+                r = requests.post(u, headers=headers, json=body, timeout=12)
+                if r.ok:
+                    data = r.json()
+                    token = data.get('captcha_token')
+                    expires_in = int(data.get('expires_in', 300) or 300)
+                    if token:
+                        self._cached_captcha_token = token
+                        self._cached_captcha_expiry = now + expires_in
+                        return token
+            except Exception as e:
+                self.log_callback(logging.DEBUG, "Shield captcha init failed on {0}: {1}".format(u, e))
+
+        return None
+
+    def _get_headers(self, config=None, access_token=None, use_web_client=False):
+        """Build standard headers required by PikPak backend."""
+        if use_web_client:
+            client_id = self.WEB_CLIENT_ID
+            device_id = getattr(self, '_shield_device_id', None) or self._get_device_id(config)
+        else:
+            client_id = self.DEFAULT_CLIENT_ID
+            if isinstance(config, dict) and config.get('client_id'):
+                client_id = config.get('client_id')
+            device_id = self._get_device_id(config)
 
         headers = {
             "User-Agent": self.USER_AGENT,
@@ -324,11 +430,13 @@ class PikPakEngine:
             "Content-Type": "application/json;charset=utf-8",
             "x-client-id": client_id,
             "x-device-id": device_id,
-            "x-client-version": "2.3.2.4101",
-            "x-os-version": "Win32",
+            "x-client-version": "2.3.2.4101" if not use_web_client else "1.0.0",
+            "x-os-version": "Win32" if not use_web_client else "MacIntel",
             "x-protocol-version": "301",
-            "x-sdk-version": "6.0.0",
+            "x-sdk-version": "6.0.0" if not use_web_client else "8.1.4",
         }
+        if use_web_client:
+            headers["x-device-sign"] = "wdi10." + device_id + ("x" * 32)
         if access_token:
             headers["Authorization"] = "Bearer " + access_token
         return headers
@@ -338,7 +446,14 @@ class PikPakEngine:
         if requests is None:
             return None
 
-        headers = self._get_headers(config, access_token)
+        is_share_path = (path or '').startswith('/share')
+        headers = self._get_headers(config, access_token, use_web_client=is_share_path)
+
+        if is_share_path:
+            token = self._get_shield_captcha_token()
+            if token:
+                headers['x-captcha-token'] = token
+
         urls = [
             "{0}{1}".format(self.API_BASE, path),
             "{0}{1}".format(self.API_FALLBACK, path)
@@ -759,12 +874,13 @@ class PikPakEngine:
             if self.stop_checker() or self._stopped:
                 return {"error": "Đã dừng bởi người dùng."}
 
-            share_id, parent_id, url_pwd = self._parse_url(line)
+            share_id, parent_id, url_pwd, file_spec = self._parse_url(line)
             if not share_id:
                 self.log_callback(logging.WARNING, "Không nhận diện được liên kết PikPak: {0}".format(line))
                 continue
 
             pwd = url_pwd or file_password or ""
+            line_items = []
 
             # Step 1: Try Web SSR Nuxt parser first (bypasses captcha restrictions)
             web_info = self._parse_share_via_web(share_id, parent_id=parent_id, pass_code=pwd)
@@ -773,7 +889,7 @@ class PikPakEngine:
                 self.log_callback(logging.INFO, "PikPak share nhận diện: '{0}' (ID: {1})".format(share_title, share_id))
 
                 if web_info.get('files'):
-                    all_items.extend(web_info['files'])
+                    line_items.extend(web_info['files'])
 
                 if web_info.get('folders') and not parent_id:
                     for sub in web_info['folders']:
@@ -783,47 +899,79 @@ class PikPakEngine:
                         if sub_info and sub_info.get('files'):
                             for sf in sub_info['files']:
                                 sf['rel_dir'] = sub_name
-                                all_items.append(sf)
-                continue
+                                line_items.append(sf)
 
             # Step 2: Fall back to official API if web parsing not available
-            info = self._get_share_info(share_id, pass_code=pwd, config=config, access_token=access_token)
-            if "error" in info:
-                return info
+            if not line_items:
+                info = self._get_share_info(share_id, pass_code=pwd, config=config, access_token=access_token)
+                if "error" in info:
+                    return info
 
-            pass_code_token = info.get('pass_code_token') or ''
-            share_title = info.get('share_title') or share_id
-            self.log_callback(logging.INFO, "PikPak share nhận diện: '{0}' (ID: {1})".format(share_title, share_id))
+                pass_code_token = info.get('pass_code_token') or ''
+                share_title = info.get('share_title') or share_id
+                self.log_callback(logging.INFO, "PikPak share nhận diện: '{0}' (ID: {1})".format(share_title, share_id))
 
-            folder_items = self._list_share_folder(
-                share_id,
-                parent_id=parent_id or "",
-                pass_code_token=pass_code_token,
-                config=config,
-                access_token=access_token,
-                current_rel_dir=""
-            )
+                folder_items = self._list_share_folder(
+                    share_id,
+                    parent_id=parent_id or "",
+                    pass_code_token=pass_code_token,
+                    config=config,
+                    access_token=access_token,
+                    current_rel_dir=""
+                )
 
-            if not folder_items:
-                # Could be a single shared file without subfolder listing
-                raw_files = info.get('raw_data', {}).get('files') or []
-                for rf in raw_files:
-                    f_id = rf.get('id')
-                    f_name = self._safe_name(rf.get('name') or share_title)
-                    f_size = int(rf.get('size') or 0)
-                    folder_items.append({
-                        "file_id": f_id,
-                        "file_name": f_name,
-                        "file_size": f_size,
-                        "file_size_human": self._human_size(f_size),
-                        "rel_dir": "",
-                        "share_id": share_id,
-                        "pass_code_token": pass_code_token,
-                        "download_url": rf.get('web_content_link') or '',
-                        "url": "https://mypikpak.com/s/" + share_id
-                    })
+                if not folder_items:
+                    # Could be a single shared file without subfolder listing
+                    raw_files = info.get('raw_data', {}).get('files') or []
+                    for rf in raw_files:
+                        f_id = rf.get('id')
+                        f_name = self._safe_name(rf.get('name') or share_title)
+                        f_size = int(rf.get('size') or 0)
+                        folder_items.append({
+                            "file_id": f_id,
+                            "file_name": f_name,
+                            "file_size": f_size,
+                            "file_size_human": self._human_size(f_size),
+                            "rel_dir": "",
+                            "share_id": share_id,
+                            "pass_code_token": pass_code_token,
+                            "download_url": rf.get('web_content_link') or '',
+                            "url": "https://mypikpak.com/s/" + share_id
+                        })
 
-            all_items.extend(folder_items)
+                line_items.extend(folder_items)
+
+            # Apply single file selection / filter if provided
+            if file_spec and line_items:
+                spec_clean = file_spec.strip()
+                filtered = []
+                if spec_clean.isdigit():
+                    idx = int(spec_clean)
+                    if 1 <= idx <= len(line_items):
+                        filtered = [line_items[idx - 1]]
+                        self.log_callback(logging.INFO,
+                            "Đã chọn file #{0}: {1}".format(idx, filtered[0]['file_name']))
+                elif spec_clean.lower() in ['first', 'test', 'sample', '1st']:
+                    filtered = [line_items[0]]
+                    self.log_callback(logging.INFO,
+                        "Đã chọn file đầu tiên để test: {0}".format(filtered[0]['file_name']))
+                else:
+                    spec_lower = spec_clean.lower()
+                    for it in line_items:
+                        if it.get('file_id') == spec_clean or spec_lower in (it.get('file_name') or '').lower():
+                            filtered.append(it)
+                    if filtered:
+                        self.log_callback(logging.INFO,
+                            "Tìm thấy {0} file khớp với '{1}'".format(len(filtered), spec_clean))
+                    else:
+                        self.log_callback(logging.WARNING,
+                            "Không tìm thấy file nào khớp với '{0}' trong thư mục PikPak. Sẽ tải toàn bộ.".format(spec_clean))
+                        filtered = line_items
+
+                if filtered:
+                    line_items = filtered
+
+            all_items.extend(line_items)
 
         if not all_items:
             return {"error": "Không tìm thấy file nào từ các liên kết PikPak đã cung cấp."}
