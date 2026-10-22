@@ -2732,6 +2732,52 @@ if (loadPikpakConfigBtn) loadPikpakConfigBtn.addEventListener('click', loadPikpa
 if (clearPikpakConfigBtn) clearPikpakConfigBtn.addEventListener('click', clearPikpakConfig);
 if (savePikpakConfigBtn) savePikpakConfigBtn.addEventListener('click', savePikpakConfig);
 
+// PikPak Token Help Modal
+var btnOpenPikpakHelp = document.getElementById('btnOpenPikpakHelp');
+var btnClosePikpakHelp = document.getElementById('btnClosePikpakHelp');
+var btnGotItPikpakHelp = document.getElementById('btnGotItPikpakHelp');
+var pikpakHelpModal = document.getElementById('pikpakHelpModal');
+var btnCopyConsoleScript = document.getElementById('btnCopyConsoleScript');
+
+function openPikpakHelpModal() {
+    if (pikpakHelpModal) pikpakHelpModal.style.display = 'flex';
+}
+
+function closePikpakHelpModal() {
+    if (pikpakHelpModal) pikpakHelpModal.style.display = 'none';
+}
+
+if (btnOpenPikpakHelp) btnOpenPikpakHelp.addEventListener('click', openPikpakHelpModal);
+if (btnClosePikpakHelp) btnClosePikpakHelp.addEventListener('click', closePikpakHelpModal);
+if (btnGotItPikpakHelp) btnGotItPikpakHelp.addEventListener('click', closePikpakHelpModal);
+
+if (pikpakHelpModal) {
+    pikpakHelpModal.addEventListener('click', function(e) {
+        if (e.target === pikpakHelpModal) closePikpakHelpModal();
+    });
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && pikpakHelpModal && pikpakHelpModal.style.display === 'flex') {
+        closePikpakHelpModal();
+    }
+});
+
+if (btnCopyConsoleScript) {
+    btnCopyConsoleScript.addEventListener('click', function() {
+        var codeEl = document.getElementById('cmdPikpakConsole');
+        if (codeEl) {
+            navigator.clipboard.writeText(codeEl.textContent.trim()).then(function() {
+                var oldText = btnCopyConsoleScript.textContent;
+                btnCopyConsoleScript.textContent = '✅ Đã copy!';
+                setTimeout(function() { btnCopyConsoleScript.textContent = oldText; }, 2000);
+            }).catch(function() {
+                alert('Không thể tự động copy, vui lòng chọn và copy thủ công.');
+            });
+        }
+    });
+}
+
 // ==================== SA MANAGEMENT ====================
 var saUploadArea = document.getElementById('saUploadArea');
 var saFileInput = document.getElementById('saFileInput');

@@ -500,8 +500,16 @@
                     <input type="password" id="pikpakPassword" placeholder="Để trống nếu muốn giữ mật khẩu đã lưu" autocomplete="new-password">
                 </div>
                 <div class="input-group">
-                    <label for="pikpakRefreshToken">Hoặc Refresh Token (Tùy chọn - bypass CAPTCHA)</label>
-                    <input type="password" id="pikpakRefreshToken" placeholder="Dán Refresh Token nếu muốn vượt qua CAPTCHA..." autocomplete="new-password">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <label for="pikpakRefreshToken" style="margin-bottom: 0;">Hoặc Refresh Token (Khuyên dùng - 100% bypass CAPTCHA)</label>
+                        <button type="button" id="btnOpenPikpakHelp" style="background: none; border: none; color: #38bdf8; font-size: 0.85rem; font-weight: 500; cursor: pointer; text-decoration: underline; padding: 0;">
+                            ❓ Hướng dẫn lấy Token
+                        </button>
+                    </div>
+                    <input type="password" id="pikpakRefreshToken" placeholder="Dán Refresh Token hoặc toàn bộ chuỗi credentials JSON..." autocomplete="new-password">
+                    <small style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px; display: block;">
+                        Dán mã token hoặc copy nguyên dòng Value <code>credentials_...</code> từ F12 đều được hệ thống tự động nhận diện.
+                    </small>
                 </div>
                 <div class="config-actions">
                     <button id="loadPikpakConfigBtn" class="btn-secondary">Tải lại PikPak</button>
@@ -778,9 +786,60 @@
 
 
 
+        <!-- ========== PIKPAK HELP MODAL ========== -->
+        <div id="pikpakHelpModal"
+            style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:1050; background:rgba(0,0,0,.75); backdrop-filter:blur(6px); justify-content:center; align-items:center; padding: 20px;">
+            <div
+                style="background: var(--card-bg, #1e293b); border:1px solid var(--border, #334155); border-radius:14px; width:100%; max-width:680px; max-height:90vh; display:flex; flex-direction:column; box-shadow: 0 25px 60px rgba(0,0,0,.6); overflow:hidden;">
+                <!-- Header -->
+                <div
+                    style="padding:16px 20px; border-bottom:1px solid var(--border, #334155); display:flex; justify-content:space-between; align-items:center; background: rgba(255,255,255,.02);">
+                    <h3 style="margin:0; font-size:1.15rem; color:#f8fafc; display:flex; align-items:center; gap:8px;">
+                        🔑 Hướng dẫn lấy Refresh Token PikPak (Bypass CAPTCHA)
+                    </h3>
+                    <button id="btnClosePikpakHelp" class="btn-secondary" style="padding:4px 10px; font-size:0.85rem; cursor:pointer;">✕ Đóng</button>
+                </div>
+                <!-- Body -->
+                <div style="flex:1; overflow-y:auto; padding:20px; line-height:1.6; font-size:0.92rem; color: #cbd5e1;">
+                    <div style="background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38bdf8; padding: 12px 16px; border-radius: 4px; margin-bottom: 20px;">
+                        <strong style="color: #38bdf8;">Tại sao nên dùng Refresh Token?</strong><br>
+                        Đăng nhập bằng Email/Mật khẩu thường bị PikPak chặn bởi thanh trượt CAPTCHA. Sử dụng <strong>Refresh Token</strong> sẽ giúp hệ thống đăng nhập tự động 100% trơn tru, vĩnh viễn và không bao giờ bị hỏi CAPTCHA.
+                    </div>
+
+                    <h4 style="color:#e2e8f0; margin:16px 0 8px 0; font-size:1rem;">⚡ Cách 1: Copy dòng Value trong Application (Khuyên dùng)</h4>
+                    <ol style="margin: 0; padding-left: 20px;">
+                        <li>Mở và đăng nhập tài khoản tại <a href="https://mypikpak.com" target="_blank" style="color:#38bdf8; text-decoration: underline;">mypikpak.com</a> trên trình duyệt Chrome hoặc Edge.</li>
+                        <li>Bấm phím <strong>F12</strong> (hoặc chuột phải chọn <em>Kiểm tra / Inspect</em>).</li>
+                        <li>Chọn tab <strong>Application</strong> (hoặc <em>Storage</em>).</li>
+                        <li>Ở danh mục bên trái: Mở <strong>Local storage</strong> &rarr; chọn <code>https://mypikpak.com</code>.</li>
+                        <li>Tìm dòng có Key tên là: <code style="background:rgba(0,0,0,0.3); padding:2px 6px; border-radius:4px; color:#f43f5e; font-weight:600;">credentials_...</code> (ví dụ: <em>credentials_YUMx5nI8ZU8Ap8pm</em>).</li>
+                        <li><strong>Nhấp đúp chuột vào ô Value</strong> của dòng đó &rarr; bấm <code>Ctrl + A</code> &rarr; <code>Ctrl + C</code> để copy toàn bộ chuỗi JSON.</li>
+                        <li>Dán vào ô <strong>Refresh Token</strong> trên trang này và bấm <strong>Lưu PikPak</strong>. Hệ thống sẽ tự động giải mã toàn bộ dữ liệu.</li>
+                    </ol>
+
+                    <h4 style="color:#e2e8f0; margin:22px 0 8px 0; font-size:1rem;">⚡ Cách 2: Copy bằng 1 dòng lệnh Console (Siêu tốc - 5 giây)</h4>
+                    <ol style="margin: 0; padding-left: 20px;">
+                        <li>Tại trang <a href="https://mypikpak.com" target="_blank" style="color:#38bdf8; text-decoration: underline;">mypikpak.com</a>, bấm <strong>F12</strong> &rarr; chọn tab <strong>Console</strong>.</li>
+                        <li>Dán đoạn lệnh dưới đây vào và bấm <strong>Enter</strong>:</li>
+                    </ol>
+                    <div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 12px; margin: 10px 0; position: relative;">
+                        <code id="cmdPikpakConsole" style="color: #38bdf8; font-family: monospace; font-size: 0.85rem; word-break: break-all; display: block;">copy(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k =&gt; k.startsWith('credentials')))).refresh_token)</code>
+                        <button type="button" id="btnCopyConsoleScript" style="margin-top: 8px; padding: 6px 14px; font-size: 0.8rem; background: #334155; color: #fff; border: 1px solid #475569; border-radius: 4px; cursor: pointer;">📋 Copy mã script này</button>
+                    </div>
+                    <p style="margin: 6px 0 0 0; font-size: 0.85rem; color: #94a3b8;">
+                        👉 Sau khi bấm Enter ở tab Console, mã Token đã được tự động copy vào khay nhớ tạm. Bạn chỉ cần quay lại đây bấm <code>Ctrl + V</code> vào ô Refresh Token rồi bấm Lưu.
+                    </p>
+                </div>
+                <!-- Footer -->
+                <div style="padding:12px 20px; border-top:1px solid var(--border, #334155); display:flex; justify-content:flex-end; background: rgba(255,255,255,.02);">
+                    <button id="btnGotItPikpakHelp" class="btn-primary" style="padding:8px 24px; font-size:0.9rem; cursor:pointer;">Đã hiểu</button>
+                </div>
+            </div>
+        </div>
+
     </main>
 
-    <script src="/static/js/app.js?v=2.5"></script>
+    <script src="/static/js/app.js?v=2.6"></script>
 </body>
 
 </html>
