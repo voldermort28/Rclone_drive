@@ -2562,15 +2562,12 @@ def cloud_download_start():
 
 @app.route('/api/cloud-download/status', methods=['GET'])
 def cloud_download_status():
-    if not active_cloud_download_job['started_at']:
-        return jsonify({'status': 'idle'})
-
     config = _load_github_config()
     pat = config.get('github_pat')
     repo = config.get('github_repo')
 
     if not pat or not repo:
-        return jsonify({'status': 'error', 'error': 'Chưa cấu hình GitHub'})
+        return jsonify({'status': 'idle'})
 
     headers = {
         "Accept": "application/vnd.github+json",
@@ -2579,26 +2576,31 @@ def cloud_download_status():
     }
 
     # 1. If run_id is not yet resolved, query the latest workflow runs
-    if not active_cloud_download_job['run_id']:
+    if not active_cloud_download_job.get('run_id'):
         url = "https://api.github.com/repos/{0}/actions/runs".format(repo)
-        params = {"event": "repository_dispatch", "per_page": 5}
+        params = {"per_page": 5}
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=12)
             if resp.status_code == 200:
                 runs = resp.json().get('workflow_runs', [])
                 for run in runs:
+                    if 'Cloud Download' in run.get('name', '') and run.get('status') in ['queued', 'in_progress']:
+                        active_cloud_download_job['run_id'] = run['id']
+                        active_cloud_download_job['started_at'] = active_cloud_download_job.get('started_at') or time.time()
+                        break
                     from datetime import datetime
                     created_dt = datetime.strptime(run['created_at'], "%Y-%m-%dT%H:%M:%SZ")
                     created_epoch = created_dt.timestamp()
-                    if created_epoch >= (active_cloud_download_job['started_at'] - 30):
+                    if active_cloud_download_job.get('started_at') and created_epoch >= (active_cloud_download_job['started_at'] - 30):
                         active_cloud_download_job['run_id'] = run['id']
                         break
-            else:
-                return jsonify({'status': 'initializing', 'message': 'Đang kết nối tới GitHub Actions...'})
         except Exception as e:
-            return jsonify({'status': 'initializing', 'message': 'Đang kết nối... ({0})'.format(str(e))})
+            if active_cloud_download_job.get('started_at'):
+                return jsonify({'status': 'initializing', 'message': 'Đang kết nối... ({0})'.format(str(e))})
 
-    if not active_cloud_download_job['run_id']:
+    if not active_cloud_download_job.get('run_id'):
+        if not active_cloud_download_job.get('started_at'):
+            return jsonify({'status': 'idle'})
         if time.time() - active_cloud_download_job['started_at'] > 45:
             active_cloud_download_job['started_at'] = 0
             return jsonify({'status': 'idle', 'error': 'Không tìm thấy workflow khởi chạy trên GitHub. Vui lòng kiểm tra lại PAT hoặc Repo.'})
