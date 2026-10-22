@@ -2543,7 +2543,10 @@ def cloud_download_start():
             "url": url,
             "destination": destination,
             "file_password": password,
-            "rclone_conf": rclone_conf_b64
+            "rclone_conf": rclone_conf_b64,
+            "pikpak_config": _load_pikpak_config(include_secret=True) if os.path.exists(PIKPAK_CONFIG_FILE) else {},
+            "fichier_config": _load_fichier_config(include_secret=True) if os.path.exists(FICHIER_CONFIG_FILE) else {},
+            "fshare_config": _load_fshare_config(include_secret=True) if os.path.exists(FSHARE_CONFIG_FILE) else {}
         }
     }
 

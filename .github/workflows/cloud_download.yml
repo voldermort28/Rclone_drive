@@ -86,6 +86,27 @@ jobs:
             echo "⚠️ Warning: No rclone_conf provided!"
           fi
 
+      - name: Setup Engine Account Configurations
+        run: |
+          mkdir -p rclone_web_ui
+          PIKPAK_JSON='${{ toJson(github.event.client_payload.pikpak_config) }}'
+          if [ -n "$PIKPAK_JSON" ] && [ "$PIKPAK_JSON" != "{}" ] && [ "$PIKPAK_JSON" != "null" ]; then
+            echo "$PIKPAK_JSON" > rclone_web_ui/pikpak_config.json
+            echo "PikPak account configuration installed."
+          fi
+          
+          FSHARE_JSON='${{ toJson(github.event.client_payload.fshare_config) }}'
+          if [ -n "$FSHARE_JSON" ] && [ "$FSHARE_JSON" != "{}" ] && [ "$FSHARE_JSON" != "null" ]; then
+            echo "$FSHARE_JSON" > rclone_web_ui/fshare_config.json
+            echo "Fshare account configuration installed."
+          fi
+
+          FICHIER_JSON='${{ toJson(github.event.client_payload.fichier_config) }}'
+          if [ -n "$FICHIER_JSON" ] && [ "$FICHIER_JSON" != "{}" ] && [ "$FICHIER_JSON" != "null" ]; then
+            echo "$FICHIER_JSON" > rclone_web_ui/fichier_config.json
+            echo "1fichier account configuration installed."
+          fi
+
       - name: Execute Cloud Download & Upload
         run: |
           set -e

@@ -476,11 +476,28 @@ class PikPakEngine:
                 continue
         return None
 
+    def _load_config_file(self, config=None):
+        """Load pikpak_config.json from disk if config is empty."""
+        if isinstance(config, dict) and config:
+            return config
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            cfg_path = os.path.join(base_dir, 'pikpak_config.json')
+            if os.path.isfile(cfg_path):
+                with open(cfg_path, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        return loaded
+        except Exception:
+            pass
+        return config if isinstance(config, dict) else {}
+
     def _get_valid_access_token(self, config):
         """
         Verify or refresh user access token.
         Supports refresh_token or username + password.
         """
+        config = self._load_config_file(config)
         if not isinstance(config, dict):
             return None
 
@@ -694,8 +711,8 @@ class PikPakEngine:
         """
         Resolve working download link for a file item.
         1. Check existing direct link.
-        2. Query /share/file_info.
-        3. If unavailable and user is authenticated: auto-restore to account and fetch /files/{id}.
+        2. If user is authenticated: auto-restore to account and fetch /files/{id} (100% full unthrottled link).
+        3. Fall back to /share/file_info (guest preview link).
         """
         # 1. Existing direct link check
         direct = item.get('download_url') or ''
@@ -706,7 +723,35 @@ class PikPakEngine:
         file_id = item.get('file_id') or ''
         pass_code_token = item.get('pass_code_token') or ''
 
-        # 2. Query /share/file_info
+        # 2. If authenticated, ALWAYS use account restore flow to obtain the 100% official direct link
+        if access_token:
+            self.log_callback(logging.INFO, "PikPak: Sử dụng tài khoản để trích xuất link tải gốc 100% (Auto-restore)...")
+            restore_payload = {
+                "pass_code_token": pass_code_token,
+                "file_ids": [file_id],
+                "folder_id": ""
+            }
+            r_res = self._api_request('POST', '/share/restore', config=config, access_token=access_token, json_data=restore_payload, timeout=20)
+            if r_res and r_res.status_code in [200, 201]:
+                r_file = self._api_request('GET', '/files/{0}'.format(file_id), config=config, access_token=access_token, params={"usage": "FETCH"}, timeout=20)
+                if r_file and r_file.ok:
+                    try:
+                        f_data = r_file.json()
+                        link = f_data.get('web_content_link') or ''
+                        if not link and f_data.get('medias'):
+                            for m in f_data.get('medias'):
+                                m_url = m.get('link', {}).get('url')
+                                if m_url:
+                                    link = m_url
+                                    break
+                        if link and link.startswith('http'):
+                            return link, True  # True means temporary file saved in user drive
+                    except Exception as e:
+                        self.log_callback(logging.DEBUG, "PikPak fetch error: {0}".format(e))
+            elif r_res and r_res.status_code == 403:
+                self.log_callback(logging.WARNING, "PikPak: Tài khoản không đủ dung lượng cloud để lưu tạm file này.")
+
+        # 3. Query /share/file_info (guest link)
         params = {
             "share_id": share_id,
             "file_id": file_id,
@@ -728,33 +773,6 @@ class PikPakEngine:
                     return link, False
             except Exception:
                 pass
-
-        # 3. If direct link is empty, use user account restore flow
-        if access_token:
-            self.log_callback(logging.INFO, "PikPak: Sử dụng tài khoản để lấy link tải (Auto-transfer)...")
-            restore_payload = {
-                "pass_code_token": pass_code_token,
-                "file_ids": [file_id],
-                "folder_id": ""
-            }
-            r_res = self._api_request('POST', '/share/restore', config=config, access_token=access_token, json_data=restore_payload, timeout=20)
-            if r_res and r_res.status_code in [200, 201]:
-                # Fetch file info from personal drive
-                r_file = self._api_request('GET', '/files/{0}'.format(file_id), config=config, access_token=access_token, params={"usage": "FETCH"}, timeout=20)
-                if r_file and r_file.ok:
-                    try:
-                        f_data = r_file.json()
-                        link = f_data.get('web_content_link') or ''
-                        if not link and f_data.get('medias'):
-                            for m in f_data.get('medias'):
-                                m_url = m.get('link', {}).get('url')
-                                if m_url:
-                                    link = m_url
-                                    break
-                        if link and link.startswith('http'):
-                            return link, True  # True means temporary file saved in user drive
-                    except Exception as e:
-                        self.log_callback(logging.DEBUG, "PikPak fetch error: {0}".format(e))
 
         return None, False
 
@@ -861,6 +879,7 @@ class PikPakEngine:
         """
         Parse multi-line URLs and expand PikPak share links into individual file items.
         """
+        config = self._load_config_file(config)
         if requests is None:
             return {"error": "Module 'requests' chưa được cài đặt."}
 
@@ -1045,10 +1064,12 @@ class PikPakEngine:
                 return None
 
             content_length = int(self._response.headers.get('Content-Length') or 0)
-            if self._response.status_code == 206:
+            if file_size > 0:
+                total_bytes = file_size
+            elif self._response.status_code == 206:
                 total_bytes = existing_bytes + content_length
             else:
-                total_bytes = content_length or file_size
+                total_bytes = content_length or 0
 
             mode = 'ab' if (self._response.status_code == 206 and existing_bytes > 0) else 'wb'
             downloaded = existing_bytes
@@ -1095,6 +1116,24 @@ class PikPakEngine:
                         self._progress(percent, msg)
                         last_progress_time = now
                         last_downloaded = downloaded
+
+            # Strict file size verification: prevent truncated/corrupted files from being reported as success
+            if file_size > 0 and downloaded < file_size:
+                pct = int(downloaded * 100.0 / file_size)
+                err_msg = (
+                    "File tải về chưa đủ dung lượng: {0} / {1} ({2}%). "
+                    "Máy chủ PikPak giới hạn luồng tải preview (~55%) đối với khách không đăng nhập. "
+                    "Vui lòng cấu hình tài khoản PikPak (hoàn toàn miễn phí) trong tab Cấu hình để tải trọn vẹn 100% file."
+                ).format(self._human_size(downloaded), self._human_size(file_size), pct)
+                self.log_callback(logging.ERROR, err_msg)
+                self._last_error = err_msg
+                self._download_error = 'incomplete'
+                try:
+                    if os.path.exists(part_io):
+                        os.remove(part_io)
+                except Exception:
+                    pass
+                return None
 
             if os.path.exists(final_io):
                 try:
@@ -1205,6 +1244,7 @@ class PikPakEngine:
         Run the complete PikPak -> Google Drive pipeline with 3-step Unified Smart-Resume.
         """
         self._stopped = False
+        config = self._load_config_file(config)
         max_attempts = 3
 
         try:
@@ -1309,6 +1349,10 @@ class PikPakEngine:
                             break
 
                         if self.stop_checker() or self._stopped or self._download_error == 'stopped':
+                            return False
+
+                        if self._download_error == 'incomplete':
+                            self.log_callback(logging.ERROR, "Dừng xử lý do giới hạn tải của máy chủ PikPak.")
                             return False
 
                         # If link expired, try re-resolving

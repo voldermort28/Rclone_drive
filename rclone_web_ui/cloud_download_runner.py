@@ -86,7 +86,16 @@ def main():
             if url_type == 'pikpak':
                 from pikpak_engine import PikPakEngine
                 engine = PikPakEngine(progress_callback=progress_cb, log_callback=log_cb)
-                success = engine.run_full_pipeline(line, config={}, drive_dest=dest, file_password=pwd)
+                pikpak_cfg = {}
+                cfg_file = os.path.join(BASE_DIR, 'pikpak_config.json')
+                if os.path.isfile(cfg_file):
+                    try:
+                        import json
+                        with open(cfg_file, 'r', encoding='utf-8') as f:
+                            pikpak_cfg = json.load(f)
+                    except Exception:
+                        pass
+                success = engine.run_full_pipeline(line, config=pikpak_cfg, drive_dest=dest, file_password=pwd)
 
             elif url_type == 'mega':
                 from mega_engine import MegaEngine
