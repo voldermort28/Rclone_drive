@@ -18,7 +18,8 @@ TEMP_ROOTS = [
     '/tmp/mediafire_dl',
     '/tmp/mega_dl',
     '/tmp/fichier_dl',
-    '/tmp/pixeldrain_dl'
+    '/tmp/pixeldrain_dl',
+    '/tmp/pikpak_dl'
 ]
 
 ENGINE_NAMES = {
@@ -28,6 +29,7 @@ ENGINE_NAMES = {
     'mega': 'Mega',
     'fichier': '1fichier',
     'pixeldrain': 'Pixeldrain',
+    'pikpak': 'PikPak',
     'downcode': 'DownCode'
 }
 

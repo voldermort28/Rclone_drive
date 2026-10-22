@@ -24,11 +24,15 @@ Tài liệu này lưu trữ toàn bộ thông tin quan trọng của hệ thốn
 
 ## 2. KIẾN TRÚC & LUỒNG XỬ LÝ (FLOW)
 
-Dự án gồm 4 công cụ tải chính tương ứng với các tab:
+Dự án gồm các công cụ tải chính tương ứng với các pipeline:
 1. **Mega** (`mega_engine.py`)
 2. **Terabox** (`terabox_engine.py`)
 3. **MediaFire** (`mediafire_engine.py`)
 4. **Fshare** (`fshare_engine.py`)
+5. **1fichier** (`fichier_engine.py`)
+6. **Pixeldrain** (`pixeldrain_engine.py`)
+7. **PikPak** (`pikpak_engine.py`)
+8. **DownCode** (`downcode_engine.py`)
 
 ### Quy trình tải & giải mã:
 * **Tải gián tiếp qua VPS**: Link nguồn $\rightarrow$ Tải và giải mã về thư mục tạm `/tmp/[engine]_dl/` trên VPS $\rightarrow$ Đẩy lên Google Drive đích thông qua `gclone` $\rightarrow$ Xóa file tạm trên VPS ngay khi upload thành công để tránh đầy ổ cứng.

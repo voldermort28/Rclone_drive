@@ -152,6 +152,8 @@ def detect_url_type(url):
         return '1fichier'
     if 'pixeldrain.com' in url_lower:
         return 'pixeldrain'
+    if any(k in url_lower for k in ['mypikpak.com', 'pikpak.me', 'mypikpak.net', 'api-drive.mypikpak.com']):
+        return 'pikpak'
     if DowncodeEngine.is_downcode(url):
         return 'downcode'
     return 'rclone'
@@ -737,6 +739,75 @@ def run_real_pixeldrain_job(job):
     return False
 
 
+def run_real_pikpak_job(job):
+    global download_state, _pikpak_engine
+    from pikpak_engine import PikPakEngine
+    
+    download_state.update({
+        'status': 'initializing',
+        'message': 'Khởi tạo PikPak...',
+        'progress': 0,
+        'logs': [],
+        'files': [{'path': job['urls'], 'name': job['urls'], 'status': 'pending', 'progress': 0, 'message': ''}],
+        'raw_urls': job['urls'],
+        'output_dir': job['dest'],
+        'job_id': job['id'],
+        'job_type': 'pikpak'
+    })
+    
+    pikpak_state.update({
+        'status': 'fetching_info',
+        'progress': 0,
+        'message': 'Khởi tạo PikPak...',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': 'info',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+    
+    _pikpak_engine = PikPakEngine(_pikpak_progress, _pikpak_log, _pikpak_stop_checker, _pikpak_state_update)
+    
+    try:
+        download_state['status'] = 'downloading'
+        config = _load_pikpak_config(include_secret=True)
+        success = _pikpak_engine.run_full_pipeline(job['urls'], config, job['dest'], file_password=job.get('file_password', ''))
+        if _pikpak_stop_checker():
+            pikpak_state['status'] = 'stopped'
+            pikpak_state['message'] = 'Đã dừng bởi người dùng.'
+            download_state['status'] = 'stopped'
+            download_state['message'] = 'Đã dừng PikPak job.'
+        elif success:
+            pikpak_state['status'] = 'done'
+            pikpak_state['phase'] = 'done'
+            pikpak_state['message'] = 'Hoàn tất! File từ PikPak đã được copy lên Google Drive.'
+            pikpak_state['progress'] = 100
+            
+            download_state['status'] = 'completed'
+            download_state['message'] = 'Completed!'
+            download_state['progress'] = 100
+        else:
+            pikpak_state['status'] = 'error'
+            pikpak_state['phase'] = 'error'
+            err_msg = getattr(_pikpak_engine, '_last_error', '') or pikpak_state.get('message') or 'Tải từ PikPak thất bại.'
+            pikpak_state['message'] = err_msg
+            download_state['status'] = 'error'
+            download_state['message'] = err_msg
+    except Exception as e:
+        pikpak_state['status'] = 'error'
+        pikpak_state['phase'] = 'error'
+        pikpak_state['message'] = 'Lỗi: {0}'.format(str(e))
+        
+        download_state['status'] = 'error'
+        download_state['message'] = str(e)
+        
+    download_state['job_type'] = None
+    return False
+
+
 def run_real_downcode_job(job):
     global download_state
     from downcode_engine import DowncodeEngine
@@ -791,6 +862,8 @@ def run_real_downcode_job(job):
         return run_real_fichier_job(job)
     elif target_type == 'pixeldrain':
         return run_real_pixeldrain_job(job)
+    elif target_type == 'pikpak':
+        return run_real_pikpak_job(job)
     else:
         return run_real_rclone_job(job)
 
@@ -830,6 +903,8 @@ def queue_worker_loop():
                 quota_hit = run_real_fichier_job(job_to_run)
             elif job_type == 'pixeldrain':
                 quota_hit = run_real_pixeldrain_job(job_to_run)
+            elif job_type == 'pikpak':
+                quota_hit = run_real_pikpak_job(job_to_run)
             elif job_type == 'downcode':
                 quota_hit = run_real_downcode_job(job_to_run)
             else:
@@ -879,7 +954,7 @@ worker_thread.start()
 
 @app.route('/api/stop', methods=['POST'])
 def stop_download():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine, _pikpak_engine
     if download_state['status'] in ['downloading', 'initializing', 'waiting_cookie', 'waiting_ip']:
         stop_event.set()
         
@@ -924,13 +999,20 @@ def stop_download():
                 _pixeldrain_engine.stop()
             except:
                 pass
+
+        pikpak_state['stop_flag'] = True
+        if _pikpak_engine:
+            try:
+                _pikpak_engine.stop()
+            except:
+                pass
                 
         return jsonify({'message': 'Stopping process...'})
     return jsonify({'message': 'No process running'})
 
 @app.route('/api/clear_temp', methods=['POST'])
 def clear_temp():
-    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine
+    global stop_event, _terabox_engine, _fshare_engine, _mediafire_engine, _mega_engine, _fichier_engine, _pixeldrain_engine, _pikpak_engine
     # 1. Stop any currently running task
     stop_event.set()
     terabox_state['stop_flag'] = True
@@ -962,6 +1044,11 @@ def clear_temp():
     if _pixeldrain_engine:
         try: _pixeldrain_engine.stop()
         except: pass
+
+    pikpak_state['stop_flag'] = True
+    if _pikpak_engine:
+        try: _pikpak_engine.stop()
+        except: pass
         
     # 2. Delete all temp folders
     deleted_paths = []
@@ -971,14 +1058,15 @@ def clear_temp():
         (MEDIAFIRE_TMP_ROOT, 'MediaFire'),
         (MEGA_TMP_ROOT, 'Mega'),
         (FICHIER_TMP_ROOT, '1fichier'),
-        (PIXELDRAIN_TMP_ROOT, 'Pixeldrain')
+        (PIXELDRAIN_TMP_ROOT, 'Pixeldrain'),
+        (PIKPAK_TMP_ROOT, 'PikPak')
     ]:
         if os.path.exists(path):
             try:
                 shutil.rmtree(path, ignore_errors=True)
                 deleted_paths.append(name)
             except Exception as e:
-                logging.error(f"Error clearing {name} temp path: {e}")
+                logging.error("Error clearing {0} temp path: {1}".format(name, e))
                 
     # 3. Reset states to idle
     _reset_terabox_state()
@@ -987,15 +1075,16 @@ def clear_temp():
     _reset_mega_state()
     _reset_fichier_state()
     _reset_pixeldrain_state()
+    _reset_pikpak_state()
     
     # 4. Clear queue
     try:
         save_queue([])
     except Exception as e:
-        logging.error(f"Error clearing queue on clear_temp: {e}")
+        logging.error("Error clearing queue on clear_temp: {0}".format(e))
         
     if deleted_paths:
-        msg = f"Đã dừng tiến trình và xóa thư mục tạm: {', '.join(deleted_paths)}."
+        msg = "Đã dừng tiến trình và xóa thư mục tạm: {0}.".format(', '.join(deleted_paths))
     else:
         msg = "Đã dừng tiến trình và dọn dẹp trạng thái (không có thư mục tạm nào cần xóa)."
         
@@ -2063,6 +2152,136 @@ def pixeldrain_config():
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
     return jsonify(_load_pixeldrain_config(include_secret=False))
+
+
+# ==================== PIKPAK ENGINE MODULE ====================
+from pikpak_engine import PikPakEngine
+
+PIKPAK_CONFIG_FILE = os.path.join(BASE_DIR, 'pikpak_config.json')
+PIKPAK_TMP_ROOT = '/tmp/pikpak_dl'
+
+pikpak_state = {
+    'status': 'idle',
+    'progress': 0,
+    'message': '',
+    'file_name': '',
+    'file_size': 0,
+    'file_size_human': '',
+    'phase': '',
+    'logs': [],
+    'stop_flag': False,
+    'current_index': 0,
+    'total_items': 0
+}
+_pikpak_engine = None
+
+
+def _reset_pikpak_state():
+    pikpak_state.update({
+        'status': 'idle',
+        'progress': 0,
+        'message': '',
+        'file_name': '',
+        'file_size': 0,
+        'file_size_human': '',
+        'phase': '',
+        'logs': [],
+        'stop_flag': False,
+        'current_index': 0,
+        'total_items': 0
+    })
+
+
+def _pikpak_progress(percent, message):
+    pikpak_state['progress'] = percent
+    pikpak_state['message'] = message
+    sync_tool_progress_to_queue('pikpak', percent, message)
+
+
+def _pikpak_state_update(values):
+    for key, value in values.items():
+        if key in pikpak_state:
+            pikpak_state[key] = value
+    sync_tool_state_update_to_queue('pikpak', values)
+
+
+def _pikpak_log(level, message):
+    pikpak_state['logs'].append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'level': logging.getLevelName(level),
+        'msg': message
+    })
+    if len(pikpak_state['logs']) > 200:
+        pikpak_state['logs'] = pikpak_state['logs'][-200:]
+    logging.log(level, "[PIKPAK] %s", message)
+    sync_tool_log_to_queue('pikpak', level, message)
+
+
+def _pikpak_stop_checker():
+    return pikpak_state.get('stop_flag', False)
+
+
+def _load_pikpak_config(include_secret=True):
+    config = {
+        'username': os.environ.get('PIKPAK_USERNAME', ''),
+        'password': os.environ.get('PIKPAK_PASSWORD', ''),
+        'refresh_token': os.environ.get('PIKPAK_REFRESH_TOKEN', ''),
+        'access_token': '',
+        'access_token_expiry': 0,
+        'client_id': 'YvtoWO6GNHiuCl7x',
+        'device_id': ''
+    }
+    if os.path.exists(PIKPAK_CONFIG_FILE):
+        try:
+            with open(PIKPAK_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            for key in config:
+                if key in saved:
+                    config[key] = saved.get(key)
+        except Exception:
+            pass
+    if not include_secret:
+        return {
+            'username': config.get('username', ''),
+            'has_password': bool(config.get('password')),
+            'password_masked': _mask_secret(config.get('password', '')),
+            'has_refresh_token': bool(config.get('refresh_token')),
+            'refresh_token_masked': _mask_secret(config.get('refresh_token', '')),
+            'complete': bool((config.get('username') and config.get('password')) or config.get('refresh_token') or config.get('access_token'))
+        }
+    return config
+
+
+def _save_pikpak_config(data):
+    current = _load_pikpak_config(include_secret=True)
+    for key in ['username', 'password', 'refresh_token']:
+        if key in data:
+            val = (data.get(key) or '').strip()
+            if key in ('password', 'refresh_token') and val == '__KEEP__':
+                continue
+            current[key] = val
+    if 'password' in data and data['password'] != '__KEEP__':
+        current['access_token'] = ''
+        current['access_token_expiry'] = 0
+    if 'refresh_token' in data and data['refresh_token'] != '__KEEP__':
+        current['access_token'] = ''
+        current['access_token_expiry'] = 0
+    with open(PIKPAK_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False)
+    return current
+
+
+@app.route('/api/pikpak/config', methods=['GET', 'POST'])
+def pikpak_config():
+    if request.method == 'POST':
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            config = _save_pikpak_config(data)
+            complete = bool((config.get('username') and config.get('password')) or config.get('refresh_token'))
+            return jsonify({'success': True, 'complete': complete, 'message': 'Đã lưu cấu hình PikPak'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify(_load_pikpak_config(include_secret=False))
 
 
 # ==================== CLOUD UNPACK MODULE ====================

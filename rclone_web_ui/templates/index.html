@@ -101,15 +101,19 @@
                         <span>Pixeldrain: <strong id="badgePixeldrainText">Kiểm tra...</strong></span>
                     </div>
                     <div class="badge-status-box">
+                        <span class="badge-indicator" id="badgePikpakIndicator"></span>
+                        <span>PikPak: <strong id="badgePikpakText">Kiểm tra...</strong></span>
+                    </div>
+                    <div class="badge-status-box">
                         <span class="badge-indicator" id="badgeDowncodeIndicator" style="background-color: #10b981;"></span>
                         <span>DownCode: <strong id="badgeDowncodeText" style="color: #10b981;">Sẵn sàng</strong></span>
                     </div>
                 </div>
 
                 <div class="input-group">
-                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire, 1fichier, Pixeldrain, mã DownCode...)</label>
+                    <label for="url">Source (Mỗi dòng 1 link Google Drive, Fshare, Terabox, Mega, MediaFire, 1fichier, Pixeldrain, PikPak, mã DownCode...)</label>
                     <textarea id="url" rows="5"
-                        placeholder="Paste link nguồn hoặc mã ở đây (mỗi dòng 1 link/mã)...&#10;VD DownCode: 2423-9499 hoặc https://downcode.org/?code=2423-9499&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY&#10;VD 1fichier: https://1fichier.com/?abcdef123&#10;VD Pixeldrain: https://pixeldrain.com/u/ABCXYZ"
+                        placeholder="Paste link nguồn hoặc mã ở đây (mỗi dòng 1 link/mã)...&#10;VD DownCode: 2423-9499 hoặc https://downcode.org/?code=2423-9499&#10;VD GD: https://drive.google.com/drive/folders/ABCXYZ&#10;VD Fshare: https://www.fshare.vn/file/ABCXYZ&#10;VD Terabox: https://www.terabox.app/s/1xyz...&#10;VD Mega: https://mega.nz/folder/ID#KEY&#10;VD 1fichier: https://1fichier.com/?abcdef123&#10;VD Pixeldrain: https://pixeldrain.com/u/ABCXYZ&#10;VD PikPak: https://mypikpak.com/s/VNxxxxxx"
                         autocomplete="off"></textarea>
                     <div style="margin-top: 8px;">
                         <label
@@ -418,6 +422,34 @@
                     </button>
                 </div>
                 <div id="pixeldrainConfigStatus" class="config-status"></div>
+            </section>
+
+            <!-- PikPak Account Section -->
+            <section class="card config-section" style="margin-top: 1.5rem;" id="pikpakConfigSection">
+                <div class="config-header">
+                    <h3>⚡ Tài khoản PikPak (mypikpak.com)</h3>
+                    <p class="config-desc">Cấu hình tài khoản PikPak (Email & Mật khẩu hoặc Refresh Token). Mặc định hệ thống tự động tải các file công khai mà không cần tài khoản. Bạn chỉ cần cấu hình khi muốn tải các file yêu cầu đăng nhập (file nén/archive, file riêng tư hoặc file dung lượng lớn).</p>
+                </div>
+                <div class="input-group">
+                    <label for="pikpakUsername">Email / Số điện thoại PikPak (Tùy chọn)</label>
+                    <input type="text" id="pikpakUsername" placeholder="Nhập email hoặc số điện thoại đăng nhập PikPak..." autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label for="pikpakPassword">Mật khẩu PikPak (Tùy chọn)</label>
+                    <input type="password" id="pikpakPassword" placeholder="Để trống nếu muốn giữ mật khẩu đã lưu" autocomplete="new-password">
+                </div>
+                <div class="input-group">
+                    <label for="pikpakRefreshToken">Hoặc Refresh Token (Tùy chọn - bypass CAPTCHA)</label>
+                    <input type="password" id="pikpakRefreshToken" placeholder="Dán Refresh Token nếu muốn vượt qua CAPTCHA..." autocomplete="new-password">
+                </div>
+                <div class="config-actions">
+                    <button id="loadPikpakConfigBtn" class="btn-secondary">Tải lại PikPak</button>
+                    <button id="clearPikpakConfigBtn" class="btn-secondary" style="border-color: #ef4444; color: #ef4444;">❌ Xóa tài khoản</button>
+                    <button id="savePikpakConfigBtn" class="btn-primary">
+                        <span class="btn-text">💾 Lưu PikPak</span>
+                    </button>
+                </div>
+                <div id="pikpakConfigStatus" class="config-status"></div>
             </section>
 
             <!-- GitHub Actions Config Section -->

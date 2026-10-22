@@ -68,6 +68,7 @@ document.querySelectorAll('.tab-btn').forEach(function (btn) {
             loadGithubConfig();
             loadFichierConfig();
             loadPixeldrainConfig();
+            loadPikpakConfig();
         } else if (tabName === 'unpack') {
             loadGithubConfig();
             checkUnpackStatus();
@@ -636,6 +637,33 @@ function checkConfigStatus() {
         .catch(() => {
             const indicator = document.getElementById('badgePixeldrainIndicator');
             const text = document.getElementById('badgePixeldrainText');
+            if (indicator && text) {
+                indicator.className = 'badge-indicator inactive';
+                indicator.style.backgroundColor = '';
+                text.textContent = 'Lỗi kết nối';
+            }
+        });
+
+    fetch('/api/pikpak/config')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('badgePikpakIndicator');
+            const text = document.getElementById('badgePikpakText');
+            if (indicator && text) {
+                if (data.complete) {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '';
+                    text.textContent = data.username ? data.username : 'VIP / Đã cấu hình';
+                } else {
+                    indicator.className = 'badge-indicator active';
+                    indicator.style.backgroundColor = '#10b981';
+                    text.textContent = 'Tự động (Free)';
+                }
+            }
+        })
+        .catch(() => {
+            const indicator = document.getElementById('badgePikpakIndicator');
+            const text = document.getElementById('badgePikpakText');
             if (indicator && text) {
                 indicator.className = 'badge-indicator inactive';
                 indicator.style.backgroundColor = '';
@@ -2161,6 +2189,8 @@ function renderQueue(records) {
             typeBadge = '<span class="status-badge" style="background-color: #d97706; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">1fichier</span>';
         } else if (jobType === 'pixeldrain') {
             typeBadge = '<span class="status-badge" style="background-color: #06b6d4; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">Pixeldrain</span>';
+        } else if (jobType === 'pikpak') {
+            typeBadge = '<span class="status-badge" style="background-color: #7c3aed; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">PikPak</span>';
         } else if (jobType === 'downcode') {
             typeBadge = '<span class="status-badge" style="background-color: #8b5cf6; color: white; margin-right: 6px; font-size: 10px; padding: 2px 6px; display: inline-block;">DownCode</span>';
         } else {
@@ -2572,6 +2602,129 @@ if (loadPixeldrainConfigBtn) loadPixeldrainConfigBtn.addEventListener('click', l
 if (clearPixeldrainConfigBtn) clearPixeldrainConfigBtn.addEventListener('click', clearPixeldrainConfig);
 if (savePixeldrainConfigBtn) savePixeldrainConfigBtn.addEventListener('click', savePixeldrainConfig);
 
+// ==================== PIKPAK CONFIG ====================
+function loadPikpakConfig() {
+    var username = document.getElementById('pikpakUsername');
+    var password = document.getElementById('pikpakPassword');
+    var refreshToken = document.getElementById('pikpakRefreshToken');
+    var status = document.getElementById('pikpakConfigStatus');
+    if (!status) return;
+
+    status.textContent = 'Đang tải cấu hình PikPak...';
+    status.className = 'config-status';
+
+    fetch('/api/pikpak/config')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (username) username.value = data.username || '';
+            if (password) password.value = '';
+            if (refreshToken) refreshToken.value = '';
+            
+            if (data.complete) {
+                var info = [];
+                if (data.username) info.push(data.username);
+                if (data.has_password) info.push('Mật khẩu: ' + data.password_masked);
+                if (data.has_refresh_token) info.push('Token: ' + data.refresh_token_masked);
+                status.textContent = '✅ PikPak đã cấu hình (' + info.join(', ') + ')';
+                status.className = 'config-status success';
+            } else {
+                status.textContent = 'ℹ️ Chưa cấu hình tài khoản. Hệ thống sẽ tự động tải ở chế độ Tự động (Free).';
+                status.className = 'config-status';
+            }
+            checkConfigStatus();
+        })
+        .catch(function () {
+            status.textContent = '❌ Không tải được cấu hình PikPak';
+            status.className = 'config-status error';
+        });
+}
+
+function savePikpakConfig() {
+    var username = document.getElementById('pikpakUsername');
+    var password = document.getElementById('pikpakPassword');
+    var refreshToken = document.getElementById('pikpakRefreshToken');
+    var status = document.getElementById('pikpakConfigStatus');
+    if (!status) return;
+
+    status.textContent = 'Đang lưu cấu hình PikPak...';
+    status.className = 'config-status';
+
+    var payload = {
+        username: username ? username.value.trim() : '',
+        password: (password && password.value.trim()) ? password.value.trim() : '__KEEP__',
+        refresh_token: (refreshToken && refreshToken.value.trim()) ? refreshToken.value.trim() : '__KEEP__'
+    };
+
+    fetch('/api/pikpak/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = data.complete ? '✅ Đã lưu cấu hình tài khoản PikPak!' : 'ℹ️ Chưa có tài khoản, chuyển sang chế độ Tự động (Free).';
+                status.className = data.complete ? 'config-status success' : 'config-status';
+                if (password) password.value = '';
+                if (refreshToken) refreshToken.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi lưu PikPak');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+function clearPikpakConfig() {
+    var username = document.getElementById('pikpakUsername');
+    var password = document.getElementById('pikpakPassword');
+    var refreshToken = document.getElementById('pikpakRefreshToken');
+    var status = document.getElementById('pikpakConfigStatus');
+    if (!status) return;
+
+    if (!confirm('Bạn có chắc chắn muốn xóa tài khoản PikPak và chuyển về chế độ Tự động (Free)?')) {
+        return;
+    }
+
+    status.textContent = 'Đang xóa tài khoản PikPak...';
+    status.className = 'config-status';
+
+    fetch('/api/pikpak/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: '', password: '', refresh_token: '' })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                status.textContent = 'ℹ️ Đã xóa tài khoản PikPak, chuyển sang chế độ Tự động (Free).';
+                status.className = 'config-status success';
+                if (username) username.value = '';
+                if (password) password.value = '';
+                if (refreshToken) refreshToken.value = '';
+                checkConfigStatus();
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Lỗi xóa tài khoản PikPak');
+                status.className = 'config-status error';
+            }
+        })
+        .catch(function (e) {
+            status.textContent = '❌ Lỗi kết nối: ' + e;
+            status.className = 'config-status error';
+        });
+}
+
+var loadPikpakConfigBtn = document.getElementById('loadPikpakConfigBtn');
+var clearPikpakConfigBtn = document.getElementById('clearPikpakConfigBtn');
+var savePikpakConfigBtn = document.getElementById('savePikpakConfigBtn');
+if (loadPikpakConfigBtn) loadPikpakConfigBtn.addEventListener('click', loadPikpakConfig);
+if (clearPikpakConfigBtn) clearPikpakConfigBtn.addEventListener('click', clearPikpakConfig);
+if (savePikpakConfigBtn) savePikpakConfigBtn.addEventListener('click', savePikpakConfig);
+
 // ==================== SA MANAGEMENT ====================
 var saUploadArea = document.getElementById('saUploadArea');
 var saFileInput = document.getElementById('saFileInput');
@@ -2829,7 +2982,8 @@ function renderPendingList(data) {
             'mediafire': '#0284c7',
             'mega': '#ea580c',
             'fichier': '#7c3aed',
-            'pixeldrain': '#059669'
+            'pixeldrain': '#059669',
+            'pikpak': '#9333ea'
         };
         var engColor = engColors[item.engine] || '#64748b';
         var engineBadge = '<span class="status-badge" style="background-color: ' + engColor + '; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 4px;">' +
