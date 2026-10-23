@@ -18,6 +18,7 @@ import sys
 import hashlib
 import uuid
 import random
+import socket
 
 try:
     from urllib.parse import urlparse, parse_qs, unquote
@@ -1034,6 +1035,7 @@ class PikPakEngine:
     def download_to_vps(self, direct_url, tmp_dir, file_name, file_size, item_meta=None, config=None, access_token=None):
         """
         Download file from PikPak direct URL to VPS tmp_dir with HTTP Range resume support.
+        Supports multi-retry persistent resuming on network drop, socket timeout, and link refresh.
         """
         if requests is None:
             self.log_callback(logging.ERROR, "Module 'requests' chưa được cài đặt.")
@@ -1049,157 +1051,231 @@ class PikPakEngine:
         part_io = self._path_for_io(part_path)
         final_io = self._path_for_io(final_path)
 
-        existing_bytes = 0
-        if os.path.isfile(part_io):
-            existing_bytes = os.path.getsize(part_io)
-            if file_size > 0 and existing_bytes > file_size:
-                try:
-                    os.remove(part_io)
-                except Exception:
-                    pass
-                existing_bytes = 0
+        LIMIT_6GB = 6 * 1024 * 1024 * 1024
+        current_url = direct_url
+        consecutive_stalls = 0
+        last_progress_bytes = -1
+        max_stall_retries = 10
 
-        req_headers = {
-            "User-Agent": self.USER_AGENT,
-            "Accept": "*/*"
-        }
-        if existing_bytes > 0:
-            req_headers["Range"] = "bytes={0}-".format(existing_bytes)
-            self.log_callback(logging.INFO,
-                "Tiếp tục tải file dở dang từ byte {0} ({1})...".format(
-                    existing_bytes, self._human_size(existing_bytes)))
-
-        try:
-            self._response = requests.get(direct_url, headers=req_headers, stream=True, timeout=30)
-
-            # If Range request was rejected, restart fresh
-            if self._response.status_code not in [200, 206] and existing_bytes > 0:
-                self.log_callback(logging.WARNING,
-                    "PikPak từ chối Range HTTP {0}; tải lại từ đầu.".format(self._response.status_code))
-                try:
-                    os.remove(part_io)
-                except Exception:
-                    pass
-                existing_bytes = 0
-                req_headers.pop("Range", None)
-                self._response = requests.get(direct_url, headers=req_headers, stream=True, timeout=30)
-
-            if self._response.status_code == 403 or self._response.status_code == 401:
-                self.log_callback(logging.ERROR, "PikPak: Link tải hết hạn hoặc bị từ chối (HTTP {0}).".format(self._response.status_code))
-                self._download_error = 'expired'
+        while True:
+            if self.stop_checker() or self._stopped:
+                self.log_callback(logging.WARNING, "Quá trình tải PikPak bị dừng.")
+                self._download_error = 'stopped'
                 return None
 
-            if self._response.status_code not in [200, 206]:
-                self.log_callback(logging.ERROR, "PikPak: Lỗi tải file (HTTP {0}).".format(self._response.status_code))
-                self._download_error = 'retryable'
-                return None
+            existing_bytes = 0
+            if os.path.isfile(part_io):
+                existing_bytes = os.path.getsize(part_io)
+                if file_size > 0 and existing_bytes > file_size:
+                    try:
+                        os.remove(part_io)
+                    except Exception:
+                        pass
+                    existing_bytes = 0
 
-            content_length = int(self._response.headers.get('Content-Length') or 0)
-            if file_size > 0:
-                total_bytes = file_size
-            elif self._response.status_code == 206:
-                total_bytes = existing_bytes + content_length
+            # 1. Check if already complete
+            if file_size > 0 and existing_bytes >= file_size:
+                self.log_callback(logging.INFO, "File đã được tải đầy đủ ({0}).".format(self._human_size(existing_bytes)))
+                break
+
+            # 2. Check for stall (no new bytes downloaded across attempts)
+            if existing_bytes == last_progress_bytes:
+                consecutive_stalls += 1
             else:
-                total_bytes = content_length or 0
+                consecutive_stalls = 0
+                last_progress_bytes = existing_bytes
 
-            mode = 'ab' if (self._response.status_code == 206 and existing_bytes > 0) else 'wb'
-            downloaded = existing_bytes
+            if consecutive_stalls >= 5:
+                # If file >= 6GB and downloaded >= 45%, PikPak has capped the stream at preview limit (~55%)
+                if file_size >= LIMIT_6GB and existing_bytes >= int(0.45 * file_size):
+                    pct = int(existing_bytes * 100.0 / file_size)
+                    self.log_callback(logging.INFO,
+                        "File lớn hơn 6 GB: Đã đạt giới hạn stream preview ({0} / {1} - {2}%). Chấp nhận file preview hoàn chỉnh.".format(
+                            self._human_size(existing_bytes), self._human_size(file_size), pct
+                        )
+                    )
+                    break
+                elif consecutive_stalls >= max_stall_retries:
+                    pct = int(existing_bytes * 100.0 / file_size) if file_size > 0 else 0
+                    err_msg = "Không thể tiếp tục tải thêm sau {0} lần thử (đã tải {1}/{2} - {3}%).".format(
+                        consecutive_stalls, self._human_size(existing_bytes), self._human_size(file_size), pct
+                    )
+                    self.log_callback(logging.ERROR, err_msg)
+                    self._last_error = err_msg
+                    self._download_error = 'stalled'
+                    return None
 
-            start_time = time.time()
-            last_progress_time = start_time
-            last_downloaded = downloaded
+            req_headers = {
+                "User-Agent": self.USER_AGENT,
+                "Accept": "*/*"
+            }
+            if existing_bytes > 0:
+                req_headers["Range"] = "bytes={0}-".format(existing_bytes)
+                if consecutive_stalls == 0:
+                    self.log_callback(logging.INFO,
+                        "Tiếp tục tải file từ byte {0} ({1})...".format(
+                            existing_bytes, self._human_size(existing_bytes)))
 
-            with open(part_io, mode) as f:
-                for chunk in self._response.iter_content(chunk_size=self.CHUNK_SIZE):
-                    if self.stop_checker() or self._stopped:
-                        self.log_callback(logging.WARNING, "Quá trình tải PikPak bị dừng.")
-                        self._download_error = 'stopped'
-                        return None
+            resp = None
+            try:
+                resp = requests.get(current_url, headers=req_headers, stream=True, timeout=(20, 60))
+                self._response = resp
 
-                    if not chunk:
+                # Link expired or unauthorized
+                if resp.status_code in [401, 403]:
+                    self.log_callback(logging.WARNING, "PikPak: Link tải hết hạn hoặc bị từ chối (HTTP {0}), đang lấy lại link mới...".format(resp.status_code))
+                    if item_meta:
+                        new_url, _ = self._resolve_download_url(item_meta, config=config, access_token=access_token)
+                        if new_url and new_url != current_url:
+                            current_url = new_url
+                            time.sleep(2)
+                            continue
+                    self._download_error = 'expired'
+                    return None
+
+                # HTTP 416: Range Not Satisfiable
+                if resp.status_code == 416:
+                    if file_size > 0 and existing_bytes >= file_size:
+                        break
+                    if file_size >= LIMIT_6GB and existing_bytes >= int(0.45 * file_size):
+                        pct = int(existing_bytes * 100.0 / file_size)
+                        self.log_callback(logging.INFO,
+                            "PikPak trả về HTTP 416 (đã chạm giới hạn preview stream {0}%): File preview {1} hoàn tất.".format(
+                                pct, self._human_size(existing_bytes)
+                            )
+                        )
+                        break
+                    else:
+                        self.log_callback(logging.WARNING, "HTTP 416 khi chưa đủ file, thử lại kết nối...")
+                        consecutive_stalls += 1
+                        time.sleep(3)
                         continue
 
-                    f.write(chunk)
-                    downloaded += len(chunk)
+                if resp.status_code not in [200, 206]:
+                    self.log_callback(logging.WARNING, "PikPak phản hồi HTTP {0}. Đang thử kết nối lại...".format(resp.status_code))
+                    consecutive_stalls += 1
+                    time.sleep(3)
+                    continue
 
-                    now = time.time()
-                    if now - last_progress_time >= self.PROGRESS_THROTTLE:
-                        elapsed = now - last_progress_time
-                        speed = (downloaded - last_downloaded) / elapsed if elapsed > 0 else 0
-                        speed_str = "{0}/s".format(self._human_size(speed))
+                # Determine write mode and starting point
+                if resp.status_code == 206 and existing_bytes > 0:
+                    mode = 'ab'
+                    downloaded = existing_bytes
+                else:
+                    if existing_bytes > 0:
+                        self.log_callback(logging.WARNING, "PikPak trả về 200 OK thay vì 206 Partial Content; ghi đè từ đầu.")
+                    mode = 'wb'
+                    downloaded = 0
 
-                        if total_bytes > 0:
-                            percent = int(downloaded * 50.0 / total_bytes)
-                            percent = max(2, min(50, percent))
-                            rem_bytes = max(0, total_bytes - downloaded)
-                            eta_sec = rem_bytes / speed if speed > 0 else 0
-                            eta_str = self._human_time(eta_sec)
-                            msg = "Đang tải: {0} ({1}%) | {2} | ETA: {3}".format(
-                                self._human_size(downloaded),
-                                int(downloaded * 100.0 / total_bytes),
-                                speed_str,
-                                eta_str
-                            )
-                        else:
-                            percent = 25
-                            msg = "Đang tải: {0} | {1}".format(self._human_size(downloaded), speed_str)
+                content_length = int(resp.headers.get('Content-Length') or 0)
+                if file_size > 0:
+                    total_bytes = file_size
+                elif resp.status_code == 206:
+                    total_bytes = existing_bytes + content_length
+                else:
+                    total_bytes = content_length or 0
 
-                        self._progress(percent, msg)
-                        last_progress_time = now
-                        last_downloaded = downloaded
+                start_time = time.time()
+                last_progress_time = start_time
+                last_downloaded = downloaded
 
-            # File size verification
-            LIMIT_6GB = 6 * 1024 * 1024 * 1024
-            # If file >= 6GB, PikPak limits anonymous/free stream to ~55%.
-            # We accept partial >= 45% as a valid playable MP4 preview file.
-            is_acceptable_partial = (file_size >= LIMIT_6GB and downloaded >= int(0.45 * file_size))
+                with open(part_io, mode) as f:
+                    for chunk in resp.iter_content(chunk_size=self.CHUNK_SIZE):
+                        if self.stop_checker() or self._stopped:
+                            self.log_callback(logging.WARNING, "Quá trình tải PikPak bị dừng.")
+                            self._download_error = 'stopped'
+                            return None
 
-            if file_size > 0 and downloaded < file_size and not is_acceptable_partial:
-                pct = int(downloaded * 100.0 / file_size)
-                err_msg = (
-                    "File tải về chưa đủ dung lượng: {0} / {1} ({2}%). "
-                    "Máy chủ PikPak giới hạn luồng tải preview (~55%) đối với khách không đăng nhập. "
-                    "Vui lòng cấu hình tài khoản PikPak (hoàn toàn miễn phí) trong tab Cấu hình để tải trọn vẹn 100% file."
-                ).format(self._human_size(downloaded), self._human_size(file_size), pct)
-                self.log_callback(logging.ERROR, err_msg)
-                self._last_error = err_msg
-                self._download_error = 'incomplete'
-                try:
-                    if os.path.exists(part_io):
-                        os.remove(part_io)
-                except Exception:
-                    pass
-                return None
+                        if not chunk:
+                            continue
 
-            if is_acceptable_partial and downloaded < file_size:
-                pct = int(downloaded * 100.0 / file_size)
+                        f.write(chunk)
+                        downloaded += len(chunk)
+
+                        now = time.time()
+                        if now - last_progress_time >= self.PROGRESS_THROTTLE:
+                            elapsed = now - last_progress_time
+                            speed = (downloaded - last_downloaded) / elapsed if elapsed > 0 else 0
+                            speed_str = "{0}/s".format(self._human_size(speed))
+
+                            if total_bytes > 0:
+                                percent = int(downloaded * 50.0 / total_bytes)
+                                percent = max(2, min(50, percent))
+                                rem_bytes = max(0, total_bytes - downloaded)
+                                eta_sec = rem_bytes / speed if speed > 0 else 0
+                                eta_str = self._human_time(eta_sec)
+                                msg = "Đang tải: {0} ({1}%) | {2} | ETA: {3}".format(
+                                    self._human_size(downloaded),
+                                    int(downloaded * 100.0 / total_bytes),
+                                    speed_str,
+                                    eta_str
+                                )
+                            else:
+                                percent = 25
+                                msg = "Đang tải: {0} | {1}".format(self._human_size(downloaded), speed_str)
+
+                            self._progress(percent, msg)
+                            last_progress_time = now
+                            last_downloaded = downloaded
+
+                # Check status after chunk iteration ends
+                current_sz = os.path.getsize(part_io) if os.path.isfile(part_io) else downloaded
+                if file_size > 0 and current_sz >= file_size:
+                    break
+
+                # Stream ended before file finished
                 self.log_callback(logging.INFO,
-                    "File lớn hơn 6 GB: Đã tải luồng preview {0} / {1} ({2}%). File MP4 hoàn chỉnh và sẵn sàng upload.".format(
-                        self._human_size(downloaded), self._human_size(file_size), pct
+                    "Luồng tải tạm dừng ở byte {0} ({1} / {2}). Tự động kết nối lại để tải tiếp...".format(
+                        current_sz, self._human_size(current_sz), self._human_size(file_size)
                     )
                 )
+                time.sleep(2)
 
-            if os.path.exists(final_io):
-                try:
-                    os.remove(final_io)
-                except Exception:
-                    pass
-            os.rename(part_io, final_io)
-            self._progress(50, "Tải về hoàn tất ({0})".format(self._human_size(downloaded)))
-            self.log_callback(logging.INFO, "Đã tải xong: {0}".format(safe_name))
-            return final_io
-
-        except Exception as e:
-            self.log_callback(logging.ERROR, "Lỗi khi tải file PikPak: {0}".format(str(e)))
-            self._download_error = 'retryable'
-            return None
-        finally:
-            if self._response:
-                try:
-                    self._response.close()
-                except Exception:
-                    pass
+            except (requests.exceptions.RequestException, socket.error, IOError, OSError) as net_err:
+                self.log_callback(logging.WARNING, "Mạng gián đoạn ({0}). Đang tự động kết nối lại từ byte hiện tại...".format(str(net_err)))
+                time.sleep(3)
+            except Exception as e:
+                self.log_callback(logging.ERROR, "Lỗi khi tải file PikPak: {0}".format(str(e)))
+                time.sleep(3)
+            finally:
+                if resp:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
                 self._response = None
+
+        # Loop completed (either broke because full, or accepted preview)
+        final_size = os.path.getsize(part_io) if os.path.isfile(part_io) else 0
+        is_acceptable_partial = (file_size >= LIMIT_6GB and final_size >= int(0.45 * file_size))
+
+        if file_size > 0 and final_size < file_size and not is_acceptable_partial:
+            pct = int(final_size * 100.0 / file_size)
+            err_msg = "File tải về chưa đủ dung lượng: {0} / {1} ({2}%).".format(
+                self._human_size(final_size), self._human_size(file_size), pct
+            )
+            self.log_callback(logging.ERROR, err_msg)
+            self._last_error = err_msg
+            self._download_error = 'incomplete'
+            return None
+
+        if is_acceptable_partial and final_size < file_size:
+            pct = int(final_size * 100.0 / file_size)
+            self.log_callback(logging.INFO,
+                "File lớn hơn 6 GB: Đã tải luồng preview {0} / {1} ({2}%). File MP4 hoàn chỉnh và sẵn sàng upload.".format(
+                    self._human_size(final_size), self._human_size(file_size), pct
+                )
+            )
+
+        if os.path.exists(final_io):
+            try:
+                os.remove(final_io)
+            except Exception:
+                pass
+        os.rename(part_io, final_io)
+        self._progress(50, "Tải về hoàn tất ({0})".format(self._human_size(final_size)))
+        self.log_callback(logging.INFO, "Đã tải xong: {0}".format(safe_name))
+        return final_io
 
     # ==================== UPLOAD TO GDRIVE ====================
 
@@ -1317,6 +1393,7 @@ class PikPakEngine:
             self.log_callback(logging.INFO, "Kiểm tra file đã có trên Google Drive...")
             existing_files = self._scan_gdrive_existing(drive_dest)
 
+            failed_items = []
             for index, item in enumerate(items, 1):
                 if self.stop_checker() or self._stopped:
                     return False
@@ -1393,7 +1470,8 @@ class PikPakEngine:
                         self._last_error = err_msg
                         self.log_callback(logging.ERROR, err_msg)
                         self._emit_state(status='error', phase='error', message=err_msg)
-                        return False
+                        failed_items.append(display_name)
+                        continue
 
                     for attempt in range(max_attempts):
                         if self.stop_checker() or self._stopped:
@@ -1406,23 +1484,18 @@ class PikPakEngine:
                         if self.stop_checker() or self._stopped or self._download_error == 'stopped':
                             return False
 
-                        if self._download_error == 'incomplete':
-                            self.log_callback(logging.ERROR, "Dừng xử lý do giới hạn tải của máy chủ PikPak.")
-                            return False
-
-                        # If link expired, try re-resolving
-                        if self._download_error == 'expired':
-                            self.log_callback(logging.WARNING, "Link tải hết hạn, đang lấy link mới...")
-                            download_url, saved_in_account = self._resolve_download_url(item, config=config, access_token=access_token)
-                            if not download_url:
-                                return False
-
-                        self.log_callback(logging.WARNING, "Tải file lỗi. Thử lại (lần {0}/{1})...".format(attempt + 1, max_attempts))
-                        time.sleep(2)
+                        if attempt + 1 < max_attempts:
+                            self.log_callback(logging.WARNING, "Tải file gặp sự cố. Làm mới link và thử lại (lần {0}/{1})...".format(attempt + 1, max_attempts))
+                            time.sleep(3)
+                            fresh_url, fresh_saved = self._resolve_download_url(item, config=config, access_token=access_token)
+                            if fresh_url:
+                                download_url = fresh_url
+                                saved_in_account = fresh_saved
 
                     if not local_path:
                         self.log_callback(logging.ERROR, "Tải file thất bại sau {0} lần thử: {1}".format(max_attempts, display_name))
-                        return False
+                        failed_items.append(display_name)
+                        continue
 
                 if self.stop_checker() or self._stopped:
                     return False
@@ -1434,7 +1507,9 @@ class PikPakEngine:
                 item_dest = self._append_dest_path(drive_dest, rel_dir)
                 success = self.upload_to_drive(local_path, item_dest)
                 if not success:
-                    return False
+                    self.log_callback(logging.ERROR, "Upload lên Google Drive thất bại: {0}".format(display_name))
+                    failed_items.append(display_name)
+                    continue
 
                 # Cleanup VPS temporary directory
                 self.cleanup(item_tmp_dir)
@@ -1455,6 +1530,13 @@ class PikPakEngine:
 
             self._progress_base = 0.0
             self._progress_span = 100.0
+            if failed_items:
+                self.log_callback(logging.WARNING,
+                    "⚠️ Hoàn tất tiến trình nhưng có {0}/{1} file gặp sự cố: {2}".format(
+                        len(failed_items), total_items, ", ".join(failed_items)))
+                self._emit_state(status='error', phase='done', current_index=total_items, total_items=total_items)
+                return False
+
             self._emit_state(status='done', phase='done', current_index=total_items, total_items=total_items)
             self._progress(100, "Hoàn tất! File PikPak đã được copy lên Google Drive.")
             return True
