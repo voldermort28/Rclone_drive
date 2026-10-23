@@ -2663,6 +2663,45 @@ def cloud_download_status():
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)})
 
+@app.route('/api/cloud-download/logs', methods=['GET'])
+def cloud_download_logs():
+    config = _load_github_config()
+    pat = config.get('github_pat')
+    repo = config.get('github_repo')
+    run_id = request.args.get('run_id') or active_cloud_download_job.get('run_id')
+
+    if not pat or not repo:
+        return jsonify({'error': 'Chưa cấu hình GitHub PAT hoặc Repo trong tab Cấu hình'}), 400
+
+    if not run_id:
+        return jsonify({'error': 'Không có run_id được yêu cầu'}), 400
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer {0}".format(pat),
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+
+    try:
+        jobs_url = "https://api.github.com/repos/{0}/actions/runs/{1}/jobs".format(repo, run_id)
+        r_jobs = requests.get(jobs_url, headers=headers, timeout=12)
+        if not r_jobs.ok:
+            return jsonify({'error': 'Không thể lấy thông tin job từ GitHub', 'detail': r_jobs.text}), 500
+
+        jobs = r_jobs.json().get('jobs', [])
+        if not jobs:
+            return jsonify({'error': 'Không tìm thấy job nào trong run này'}), 404
+
+        job_id = jobs[0]['id']
+        logs_url = "https://api.github.com/repos/{0}/actions/jobs/{1}/logs".format(repo, job_id)
+        r_logs = requests.get(logs_url, headers=headers, timeout=25, allow_redirects=True)
+        if r_logs.ok:
+            return r_logs.text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+        else:
+            return jsonify({'error': 'GitHub trả về lỗi khi lấy log ({0})'.format(r_logs.status_code), 'detail': r_logs.text}), 500
+    except Exception as e:
+        return jsonify({'error': 'Lỗi kết nối GitHub: {0}'.format(str(e))}), 500
+
 @app.route('/api/cloud-download/cancel', methods=['POST'])
 def cloud_download_cancel():
     config = _load_github_config()
