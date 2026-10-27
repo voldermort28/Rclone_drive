@@ -722,6 +722,12 @@ class PikPakEngine:
         if direct and direct.startswith('http'):
             return direct, False
 
+        # Ensure valid access token
+        if config:
+            fresh_tok = self._get_valid_access_token(config)
+            if fresh_tok:
+                access_token = fresh_tok
+
         share_id = item.get('share_id') or ''
         file_id = item.get('file_id') or ''
         pass_code_token = item.get('pass_code_token') or ''
@@ -769,6 +775,9 @@ class PikPakEngine:
             "pass_code_token": pass_code_token
         }
         r = self._api_request('GET', '/share/file_info', config=config, access_token=access_token, params=params, timeout=20)
+        if not (r and r.ok) and access_token:
+            # Fallback as guest without token if authorized request failed
+            r = self._api_request('GET', '/share/file_info', config=config, access_token=None, params=params, timeout=20)
         if r and r.ok:
             try:
                 data = r.json()
@@ -1418,6 +1427,8 @@ class PikPakEngine:
             for index, item in enumerate(items, 1):
                 if self.stop_checker() or self._stopped:
                     return False
+
+                access_token = self._get_valid_access_token(config) or access_token
 
                 span = 100.0 / total_items
                 self._progress_base = (index - 1) * span
