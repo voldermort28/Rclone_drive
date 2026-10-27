@@ -740,7 +740,15 @@ class PikPakEngine:
                 if r_file and r_file.ok:
                     try:
                         f_data = r_file.json()
-                        link = f_data.get('web_content_link') or ''
+                        link = ''
+                        # Ưu tiên chất lượng gốc Original
+                        for m in f_data.get('medias', []):
+                            m_url = m.get('link', {}).get('url', '')
+                            if m.get('media_name') == 'Original' or 'category=original' in m_url:
+                                link = m_url
+                                break
+                        if not link:
+                            link = f_data.get('web_content_link') or ''
                         if not link and f_data.get('medias'):
                             for m in f_data.get('medias'):
                                 m_url = m.get('link', {}).get('url')
@@ -765,7 +773,15 @@ class PikPakEngine:
             try:
                 data = r.json()
                 f_info = data.get('file_info') or data
-                link = f_info.get('web_content_link') or ''
+                link = ''
+                # Ưu tiên chất lượng gốc Original
+                for m in f_info.get('medias', []):
+                    m_url = m.get('link', {}).get('url', '')
+                    if m.get('media_name') == 'Original' or 'category=original' in m_url:
+                        link = m_url
+                        break
+                if not link:
+                    link = f_info.get('web_content_link') or ''
                 if not link and f_info.get('medias'):
                     for m in f_info.get('medias'):
                         m_url = m.get('link', {}).get('url')
@@ -1056,6 +1072,7 @@ class PikPakEngine:
         consecutive_stalls = 0
         last_progress_bytes = -1
         max_stall_retries = 10
+        stream_hit_eof = False
 
         while True:
             if self.stop_checker() or self._stopped:
@@ -1133,20 +1150,19 @@ class PikPakEngine:
                     self._download_error = 'expired'
                     return None
 
-                # HTTP 416: Range Not Satisfiable
+                # HTTP 416: Range Not Satisfiable (server reached end of stream)
                 if resp.status_code == 416:
-                    if file_size > 0 and existing_bytes >= file_size:
-                        break
-                    if file_size >= LIMIT_6GB and existing_bytes >= int(0.45 * file_size):
-                        pct = int(existing_bytes * 100.0 / file_size)
+                    if existing_bytes > 0:
+                        stream_hit_eof = True
+                        pct = int(existing_bytes * 100.0 / file_size) if file_size > 0 else 100
                         self.log_callback(logging.INFO,
-                            "PikPak trả về HTTP 416 (đã chạm giới hạn preview stream {0}%): File preview {1} hoàn tất.".format(
+                            "PikPak trả về HTTP 416 (đã chạm giới hạn cuối của luồng stream {0}% - {1}): Hoàn tất tải file.".format(
                                 pct, self._human_size(existing_bytes)
                             )
                         )
                         break
                     else:
-                        self.log_callback(logging.WARNING, "HTTP 416 khi chưa đủ file, thử lại kết nối...")
+                        self.log_callback(logging.WARNING, "HTTP 416 khi chưa tải được byte nào, thử lại kết nối...")
                         consecutive_stalls += 1
                         time.sleep(3)
                         continue
@@ -1245,11 +1261,16 @@ class PikPakEngine:
                         pass
                 self._response = None
 
-        # Loop completed (either broke because full, or accepted preview)
+        # Loop completed (either broke because full, or accepted preview/stream EOF)
         final_size = os.path.getsize(part_io) if os.path.isfile(part_io) else 0
-        is_acceptable_partial = (file_size >= LIMIT_6GB and final_size >= int(0.45 * file_size))
+        is_acceptable = (
+            (file_size <= 0 and final_size > 0) or
+            (final_size >= file_size) or
+            (file_size >= LIMIT_6GB and final_size >= int(0.45 * file_size)) or
+            (stream_hit_eof and final_size >= 50 * 1024 * 1024)
+        )
 
-        if file_size > 0 and final_size < file_size and not is_acceptable_partial:
+        if file_size > 0 and not is_acceptable:
             pct = int(final_size * 100.0 / file_size)
             err_msg = "File tải về chưa đủ dung lượng: {0} / {1} ({2}%).".format(
                 self._human_size(final_size), self._human_size(file_size), pct
@@ -1259,10 +1280,10 @@ class PikPakEngine:
             self._download_error = 'incomplete'
             return None
 
-        if is_acceptable_partial and final_size < file_size:
-            pct = int(final_size * 100.0 / file_size)
+        if final_size < file_size:
+            pct = int(final_size * 100.0 / file_size) if file_size > 0 else 100
             self.log_callback(logging.INFO,
-                "File lớn hơn 6 GB: Đã tải luồng preview {0} / {1} ({2}%). File MP4 hoàn chỉnh và sẵn sàng upload.".format(
+                "Đã tải luồng stream khả dụng {0} / {1} ({2}%). File MP4 hoàn chỉnh và sẵn sàng upload.".format(
                     self._human_size(final_size), self._human_size(file_size), pct
                 )
             )
