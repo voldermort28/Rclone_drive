@@ -809,7 +809,7 @@ if (tbSaveCookieBtn) {
         if (lines.length === 0) return false;
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
-            var ok = /fshare\.vn\/file\//i.test(line) || /^[A-Za-z0-9]{8,}$/.test(line);
+            var ok = /fshare\.vn\/(file|folder)\//i.test(line) || /^[A-Za-z0-9]{8,}$/.test(line);
             if (!ok) return false;
         }
         return true;
@@ -825,9 +825,9 @@ if (tbSaveCookieBtn) {
         var url = lines[0] || '';
         var filePassword = fsPasswordInput ? fsPasswordInput.value.trim() : '';
 
-        var singleValid = url.indexOf('fshare.vn/file/') > -1 || /^[A-Za-z0-9]{8,}$/.test(url);
+        var singleValid = /fshare\.vn\/(file|folder)\//i.test(url) || /^[A-Za-z0-9]{8,}$/.test(url);
         if (!singleValid) {
-            alert('Dòng đầu tiên không phải link Fshare file hợp lệ. Cần link dạng: https://www.fshare.vn/file/...');
+            alert('Dòng đầu tiên không phải link Fshare hợp lệ. Cần link dạng: https://www.fshare.vn/file/... hoặc /folder/...');
             return;
         }
 

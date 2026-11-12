@@ -22,14 +22,16 @@ except ImportError:
 
 class FshareEngine:
     API_BASE = "https://api2.fshare.vn/api"
+    FOLDER_API_URL = "https://www.fshare.vn/api/v3/files/folder"
+    WEB_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
     DEFAULT_APP_KEY = "L2S7R6ZMagggC5wWkQhX2+aDi467PPuftWUMRFSn"
     DEFAULT_USER_AGENT = "Fshare/1 CFNetwork/1209 Darwin/20.2.0"
     CHUNK_SIZE = 1024 * 1024
 
-    def __init__(self, progress_callback, log_callback, stop_checker, state_callback=None):
+    def __init__(self, progress_callback, log_callback, stop_checker=None, state_callback=None):
         self.progress_callback = progress_callback
         self.log_callback = log_callback
-        self.stop_checker = stop_checker
+        self.stop_checker = stop_checker or (lambda: False)
         self.state_callback = state_callback
         self._process = None
         self._response = None
@@ -92,6 +94,20 @@ class FshareEngine:
         name = re.sub(r'[\\/*?:"<>|]', '_', name)
         return name or 'fshare_download'
 
+    def _safe_remote_path(self, path):
+        parts = []
+        for part in (path or '').split('/'):
+            clean = self._safe_name(part)
+            if clean and clean != 'fshare_download':
+                parts.append(clean)
+        return '/'.join(parts)
+
+    def _append_dest_path(self, drive_dest, rel_dir):
+        rel_dir = self._safe_remote_path(rel_dir)
+        if not rel_dir:
+            return drive_dest
+        return drive_dest.rstrip('/') + '/' + rel_dir
+
     def _file_id_from_url(self, url):
         raw = (url or '').strip()
         m = re.search(r'fshare\.vn/file/([A-Za-z0-9]+)', raw, re.I)
@@ -101,8 +117,165 @@ class FshareEngine:
             return raw
         return ""
 
+    def _folder_id_from_url(self, url):
+        raw = (url or '').strip()
+        m = re.search(r'fshare\.vn/folder/([A-Za-z0-9]+)', raw, re.I)
+        if m:
+            return m.group(1)
+        return ""
+
     def _file_url(self, file_id):
         return "https://www.fshare.vn/file/{0}".format(file_id)
+
+    def _get_folder_items(self, folder_id):
+        if requests is None:
+            return {'error': "Module 'requests' chưa được cài. Chạy: pip install requests"}
+        items = []
+        folder_name = folder_id
+        page = 1
+        headers = {
+            'User-Agent': self.WEB_USER_AGENT,
+            'Accept': 'application/json, text/plain, */*',
+        }
+        while True:
+            if self.stop_checker() or self._stopped:
+                return {'error': 'Đã dừng bởi người dùng.'}
+            try:
+                resp = requests.get(
+                    self.FOLDER_API_URL,
+                    params={
+                        'linkcode': folder_id,
+                        'sort': 'type,name',
+                        'page': page,
+                        'per-page': 50,
+                    },
+                    headers=headers,
+                    timeout=25,
+                )
+            except Exception as e:
+                return {'error': 'Không đọc được folder Fshare {0}: {1}'.format(folder_id, str(e))}
+
+            if resp.status_code != 200:
+                return {'error': 'Fshare folder API trả HTTP {0} cho folder {1}'.format(resp.status_code, folder_id)}
+
+            try:
+                data = resp.json()
+            except Exception:
+                return {'error': 'Fshare folder API trả dữ liệu không hợp lệ cho folder {0}.'.format(folder_id)}
+
+            if isinstance(data, list):
+                page_items = data
+                links = {}
+            elif isinstance(data, dict):
+                current = data.get('current') or {}
+                if page == 1 and current.get('name'):
+                    folder_name = self._safe_name(current.get('name'))
+                page_items = data.get('items') or []
+                links = data.get('_links') or {}
+            else:
+                page_items = []
+                links = {}
+
+            if not page_items:
+                break
+
+            items.extend(page_items)
+
+            next_link = links.get('next') if isinstance(links, dict) else None
+            self_link = links.get('self') if isinstance(links, dict) else None
+            if next_link and next_link != self_link:
+                page += 1
+            else:
+                break
+
+        return {
+            'success': True,
+            'folder_name': folder_name,
+            'items': items,
+        }
+
+    def _expand_folder(self, folder_id, rel_dir, visited):
+        if folder_id in visited:
+            return {'success': True, 'items': []}
+        visited.add(folder_id)
+
+        folder_data = self._get_folder_items(folder_id)
+        if 'error' in folder_data:
+            return folder_data
+
+        if rel_dir is None:
+            root_name = self._safe_name(folder_data.get('folder_name') or folder_id)
+            rel_dir = root_name
+            self.log_callback(logging.INFO, "Đang quét thư mục Fshare: {0}".format(root_name))
+
+        result = []
+        for raw_item in folder_data.get('items') or []:
+            if self.stop_checker() or self._stopped:
+                return {'error': 'Đã dừng bởi người dùng.'}
+            linkcode = (raw_item.get('linkcode') or '').strip()
+            if not linkcode:
+                continue
+            item_type = str(raw_item.get('type', ''))
+            raw_name = raw_item.get('name') or raw_item.get('realname') or linkcode
+            clean_name = self._safe_name(raw_name)
+
+            if item_type == '0':
+                child_rel = (rel_dir.rstrip('/') + '/' + clean_name).strip('/') if rel_dir else clean_name
+                self.log_callback(logging.INFO, "Đang quét thư mục con Fshare: {0}".format(child_rel))
+                sub_res = self._expand_folder(linkcode, child_rel, visited)
+                if 'error' in sub_res:
+                    return sub_res
+                result.extend(sub_res.get('items') or [])
+            else:
+                size = int(raw_item.get('size') or 0)
+                result.append({
+                    'url': self._file_url(linkcode),
+                    'file_id': linkcode,
+                    'file_name': clean_name,
+                    'file_size': size,
+                    'file_size_human': self._human_size(size),
+                    'rel_dir': rel_dir or '',
+                })
+
+        return {'success': True, 'items': result}
+
+    def expand_inputs(self, url_input):
+        if isinstance(url_input, list):
+            raw_urls = [u.strip() for u in url_input if u and u.strip()]
+        else:
+            raw_urls = [u.strip() for u in (url_input or '').splitlines() if u.strip()]
+
+        if not raw_urls:
+            return {'error': 'Không có link Fshare nào.'}
+
+        items = []
+        visited = set()
+        for raw_url in raw_urls:
+            folder_id = self._folder_id_from_url(raw_url)
+            file_id = self._file_id_from_url(raw_url)
+            if folder_id:
+                expanded = self._expand_folder(folder_id, None, visited)
+                if 'error' in expanded:
+                    return expanded
+                items.extend(expanded.get('items') or [])
+            elif file_id:
+                items.append({
+                    'url': self._file_url(file_id),
+                    'file_id': file_id,
+                    'file_name': '',
+                    'file_size': 0,
+                    'file_size_human': '',
+                    'rel_dir': '',
+                })
+            else:
+                return {
+                    'error': 'Link Fshare không hợp lệ: {0}. Cần dạng https://www.fshare.vn/file/... hoặc https://www.fshare.vn/folder/...'.format(raw_url)
+                }
+
+        if not items:
+            return {'error': 'Không tìm thấy file nào trong link/thư mục Fshare.'}
+
+        return {'success': True, 'items': items}
 
     def _headers(self, config, with_cookie=True):
         headers = {
@@ -236,46 +409,92 @@ class FshareEngine:
         self._session_id = session_id
         return {'success': True}
 
+    def _load_default_config(self):
+        config = {
+            'email': os.environ.get('FSHARE_USER_EMAIL', ''),
+            'password': os.environ.get('FSHARE_PASSWORD', ''),
+            'app_key': os.environ.get('FSHARE_APP_KEY', ''),
+            'user_agent': os.environ.get('FSHARE_USER_AGENT', ''),
+        }
+        cfg_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fshare_config.json')
+        if os.path.isfile(cfg_file):
+            try:
+                import json
+                with open(cfg_file, 'r', encoding='utf-8') as f:
+                    saved = json.load(f)
+                for key in config:
+                    if saved.get(key):
+                        config[key] = saved.get(key)
+            except Exception:
+                pass
+        return config
+
     def get_direct_link(self, url, config, file_password=''):
         file_id = self._file_id_from_url(url)
         if not file_id:
-            return {'error': 'Link Fshare không hợp lệ. Cần dạng https://www.fshare.vn/file/...'}
+            return {'error': 'Link Fshare không hợp lệ. Cần dạng https://www.fshare.vn/file/... hoặc /folder/...'}
 
-        logged = self.login(config)
-        if 'error' in logged:
-            return logged
+        if not self._token or not self._session_id:
+            logged = self.login(config)
+            if 'error' in logged:
+                return logged
 
-        body = {
-            'zipflag': 0,
-            'url': self._file_url(file_id),
-            'password': file_password or '',
-            'token': self._token,
-        }
-        try:
-            self.log_callback(logging.INFO, "Đang lấy direct link Fshare...")
-            resp = requests.post(
-                self.API_BASE + '/session/download',
-                json=body,
-                headers=self._headers(config),
-                timeout=20,
-            )
-        except Exception as e:
-            return {'error': 'Không lấy được direct link: {0}'.format(str(e))}
+        for attempt in range(2):
+            body = {
+                'zipflag': 0,
+                'url': self._file_url(file_id),
+                'password': file_password or '',
+                'token': self._token,
+            }
+            try:
+                self.log_callback(logging.INFO, "Đang lấy direct link Fshare...")
+                resp = requests.post(
+                    self.API_BASE + '/session/download',
+                    json=body,
+                    headers=self._headers(config),
+                    timeout=20,
+                )
+            except Exception as e:
+                return {'error': 'Không lấy được direct link: {0}'.format(str(e))}
 
-        if resp.status_code != 200:
-            return {'error': 'Fshare không cấp direct link ({0}): {1}'.format(resp.status_code, resp.text[:300])}
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    return {'error': 'Direct link response không hợp lệ.'}
+                location = data.get('location') or data.get('url') or ''
+                if location:
+                    return {'success': True, 'file_id': file_id, 'url': location}
 
-        try:
-            data = resp.json()
-        except Exception:
-            return {'error': 'Direct link response không hợp lệ.'}
+            if attempt == 0:
+                self._token = ""
+                self._session_id = ""
+                logged = self.login(config)
+                if 'error' in logged:
+                    return logged
+            else:
+                if resp.status_code != 200:
+                    return {'error': 'Fshare không cấp direct link ({0}): {1}'.format(resp.status_code, resp.text[:300])}
+                return {'error': 'Không tìm thấy direct link trong phản hồi Fshare.'}
 
-        location = data.get('location') or data.get('url') or ''
-        if not location:
-            return {'error': 'Không tìm thấy direct link trong phản hồi Fshare.'}
-        return {'success': True, 'file_id': file_id, 'url': location}
+        return {'error': 'Không tìm thấy direct link trong phản hồi Fshare.'}
 
     def get_file_info(self, url, config, file_password=''):
+        if self._folder_id_from_url(url):
+            expanded = self.expand_inputs(url)
+            if 'error' in expanded:
+                return expanded
+            items = expanded.get('items') or []
+            total_size = sum(int(i.get('file_size') or 0) for i in items)
+            return {
+                'success': True,
+                'file_id': self._folder_id_from_url(url),
+                'file_name': 'Fshare folder ({0} file)'.format(len(items)),
+                'file_size': total_size,
+                'file_size_human': self._human_size(total_size),
+                'download_url_ready': True,
+            }
+
         direct = self.get_direct_link(url, config, file_password)
         if 'error' in direct:
             return direct
@@ -288,6 +507,7 @@ class FshareEngine:
             'file_size': 0,
             'file_size_human': '',
             'download_url_ready': True,
+            'direct_url': direct.get('url') or '',
         }
 
         try:
@@ -306,16 +526,19 @@ class FshareEngine:
             pass
         return info
 
-    def download_to_vps(self, url, config, tmp_dir, file_password=''):
-        direct = self.get_direct_link(url, config, file_password)
-        if 'error' in direct:
-            self.log_callback(logging.ERROR, direct['error'])
-            return None
+    def download_to_vps(self, url, config, tmp_dir, file_password='', direct_url='', preferred_name=''):
+        if direct_url:
+            direct = {'url': direct_url, 'file_id': self._file_id_from_url(url)}
+        else:
+            direct = self.get_direct_link(url, config, file_password)
+            if 'error' in direct:
+                self.log_callback(logging.ERROR, direct['error'])
+                return None
 
         os.makedirs(tmp_dir, exist_ok=True)
         headers = {'User-Agent': config.get('user_agent') or self.DEFAULT_USER_AGENT}
         part_path = os.path.join(tmp_dir, 'download.part')
-        meta_name = direct.get('file_id') or 'fshare_download'
+        meta_name = preferred_name or direct.get('file_id') or 'fshare_download'
         existing = os.path.getsize(part_path) if os.path.exists(part_path) else 0
         if existing > 0:
             headers['Range'] = 'bytes={0}-'.format(existing)
@@ -447,28 +670,46 @@ class FshareEngine:
         except Exception as e:
             self.log_callback(logging.WARNING, "Lỗi dọn dẹp: {0}".format(str(e)))
 
-    def run_full_pipeline(self, url, config, drive_dest, file_password=''):
+    def run_full_pipeline(self, url, config=None, drive_dest='', file_password='', password=''):
         self._stopped = False
+        if not config:
+            config = self._load_default_config()
+        if not file_password and password:
+            file_password = password
         try:
-            # Parse multi-URL input (textarea: moi dong 1 link)
-            if isinstance(url, list):
-                urls = [u.strip() for u in url if u.strip()]
-            else:
-                urls = [u.strip() for u in (url or '').splitlines() if u.strip()]
-            if not urls:
+            self.log_callback(logging.INFO, "=" * 50)
+            self.log_callback(logging.INFO, "Đang phân tích danh sách link/thư mục Fshare...")
+            self._emit_state(status='fetching_info', phase='info')
+            self.progress_callback(0, "Đang lấy danh sách Fshare...")
+
+            expanded = self.expand_inputs(url)
+            if 'error' in expanded:
+                self.log_callback(logging.ERROR, expanded['error'])
+                return False
+
+            items = expanded.get('items') or []
+            total_urls = len(items)
+            if not total_urls:
                 self.log_callback(logging.ERROR, "Khong co link Fshare nao.")
                 return False
 
-            total_urls = len(urls)
             self._emit_state(total_items=total_urls, current_index=0)
+            self.log_callback(logging.INFO, "Đã tìm thấy {0} file Fshare.".format(total_urls))
 
             # Step 0: GDrive pre-scan (1 lan duy nhat)
             self.log_callback(logging.INFO, "Kiem tra file da co tren Google Drive...")
             existing_files = self._scan_gdrive_existing(drive_dest)
 
-            for idx, single_url in enumerate(urls, 1):
+            for idx, item in enumerate(items, 1):
                 if self.stop_checker() or self._stopped:
                     return False
+
+                single_url = item.get('url') or ''
+                file_name = item.get('file_name') or ''
+                file_size = int(item.get('file_size') or 0)
+                file_id = item.get('file_id') or self._file_id_from_url(single_url)
+                rel_dir = item.get('rel_dir') or ''
+                direct_url = ''
 
                 span = 100.0 / total_urls
                 self._progress_base = (idx - 1) * span
@@ -478,27 +719,37 @@ class FshareEngine:
 
                 self.log_callback(logging.INFO, "=" * 50)
                 if total_urls > 1:
-                    self.log_callback(logging.INFO, "File {0}/{1}".format(idx, total_urls))
-                self.log_callback(logging.INFO, "BUOC 1/3: Lay direct link Fshare...")
+                    self.log_callback(logging.INFO, "File {0}/{1}: {2}".format(idx, total_urls, file_name or single_url))
+                if rel_dir:
+                    self.log_callback(logging.INFO, "Thư mục đích con: {0}".format(rel_dir))
+
                 self._emit_state(status='fetching_info', phase='info',
                                  current_index=idx, total_items=total_urls)
-                self.progress_callback(0, "Dang lay thong tin Fshare...")
 
-                info = self.get_file_info(single_url, config, file_password)
-                if 'error' in info:
-                    self.log_callback(logging.ERROR, info['error'])
-                    return False
+                if not file_name or file_size <= 0:
+                    self.log_callback(logging.INFO, "BUOC 1/3: Lay direct link Fshare...")
+                    self._progress(0, "Dang lay thong tin Fshare...")
+                    info = self.get_file_info(single_url, config, file_password)
+                    if 'error' in info:
+                        self.log_callback(logging.ERROR, info['error'])
+                        return False
+                    file_name = info.get('file_name') or file_name
+                    file_size = int(info.get('file_size') or file_size or 0)
+                    file_id = info.get('file_id') or file_id
+                    direct_url = info.get('direct_url') or ''
 
-                file_name = info.get('file_name', '')
-                file_size = info.get('file_size', 0)
-                file_id = info.get('file_id', '')
                 self._emit_state(file_name=file_name,
                                  file_size=file_size,
-                                 file_size_human=info.get('file_size_human', ''))
+                                 file_size_human=self._human_size(file_size))
 
                 # Step 1: Check GDrive skip
                 if file_name and file_name != file_id and file_size > 0:
-                    if (file_name, file_size) in existing_files:
+                    if rel_dir:
+                        check_path = rel_dir.replace('\\', '/').strip('/') + '/' + file_name
+                    else:
+                        check_path = file_name
+                    check_path = check_path.replace('\\', '/').strip('/')
+                    if (check_path, file_size) in existing_files or (not rel_dir and (file_name, file_size) in existing_files):
                         self.log_callback(logging.INFO,
                             "File da co tren GDrive, skip hoan toan: {0}".format(file_name))
                         self._progress(100, "Skipped (da co tren GDrive)")
@@ -507,11 +758,13 @@ class FshareEngine:
                 if self.stop_checker() or self._stopped:
                     return False
 
+                item_dest = self._append_dest_path(drive_dest, rel_dir)
+
                 # Save pending metadata
                 try:
                     from pending_manager import save_pending_meta
                     save_pending_meta(tmp_dir, url=single_url, file_name=file_name,
-                                      file_size=file_size, dest=drive_dest, engine='fshare')
+                                      file_size=file_size, dest=item_dest, engine='fshare')
                 except Exception:
                     pass
 
@@ -524,7 +777,8 @@ class FshareEngine:
                     self.log_callback(logging.INFO, "=" * 50)
                     self.log_callback(logging.INFO, "BUOC 2/3: Tai file Fshare ve VPS...")
                     self._emit_state(status='downloading', phase='download')
-                    local_path = self.download_to_vps(single_url, config, tmp_dir, file_password)
+                    local_path = self.download_to_vps(single_url, config, tmp_dir, file_password,
+                                                      direct_url=direct_url, preferred_name=file_name)
                     if not local_path:
                         return False
 
@@ -535,7 +789,7 @@ class FshareEngine:
                 self.log_callback(logging.INFO, "BUOC 3/3: Day file len Google Drive...")
                 self._emit_state(status='uploading', phase='upload')
                 self._progress(50, "Bat dau upload len Google Drive...")
-                success = self.upload_to_drive(local_path, drive_dest)
+                success = self.upload_to_drive(local_path, item_dest)
                 if not success:
                     return False
                 self.cleanup(tmp_dir)
