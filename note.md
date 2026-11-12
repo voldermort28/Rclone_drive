@@ -7,7 +7,7 @@ Tài liệu này lưu trữ toàn bộ thông tin quan trọng của hệ thốn
 ## 1. THÔNG TIN HỆ THỐNG & VPS
 
 * **Tên dự án**: GDriveDL - Rclone VPS Web Controller
-* **VPS IP**: `116.118.48.68` (Port `8080` cho Web UI, Webroot `/www/wwwroot/rclone.laboon.vn/`)
+* **VPS IP**: `116.118.48.68` (Port `8080` cho Web UI, SSH Port `288`, Webroot `/www/wwwroot/rclone.laboon.vn/`)
 * **Python Version**: `3.6.8` (CentOS 7)
 * **Gclone Binary**: `/usr/bin/gclone` hoặc `/usr/local/bin/gclone`
 * **Service Accounts (SA)**: Thư mục chứa các file JSON của SA ở `/www/wwwroot/rclone.laboon.vn/sa` (hiện có 27 tài khoản dùng để xoay vòng vượt giới hạn sao chép 750GB/ngày của Google Drive).

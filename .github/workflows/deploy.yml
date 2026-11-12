@@ -17,7 +17,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: 288
           source: "rclone_web_ui/*"
           target: "/www/wwwroot/rclone.laboon.vn/"
           strip_components: 1
@@ -28,7 +28,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: 288
           script: |
             cd /www/wwwroot/rclone.laboon.vn/
             # Kill existing app safely (avoid killing this session)
